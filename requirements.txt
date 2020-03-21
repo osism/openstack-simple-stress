@@ -1,0 +1,3 @@
+PyYAML
+openstacksdk
+os-client-config

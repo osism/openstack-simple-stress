@@ -18,7 +18,8 @@ opts = [
     cfg.StrOpt('image', default='Ubuntu 18.04'),
     cfg.StrOpt('keypair'),
     cfg.StrOpt('network', default='net-to-public-testbed'),
-    cfg.StrOpt('prefix', default='test')
+    cfg.StrOpt('prefix', default='test'),
+    cfg.StrOpt('zone', help='Availability zone to use', default='south-2'),
 ]
 
 CONF.register_cli_opts(opts)
@@ -31,6 +32,7 @@ def run(x, image, flavor, network, user_data):
     name = "%s-%d" % (CONF.prefix, x)
     logging.info("Creating server %s" % name)
     server = cloud.compute.create_server(
+        availability_zone=CONF.zone,
         name=name, image_id=image.id, flavor_id=flavor.id,
         networks=[{"uuid": network.id}], user_data=b64_user_data)
 

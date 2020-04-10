@@ -11,6 +11,7 @@ PROJECT_NAME = "openstack-instance-spawner"
 CONF = cfg.CONF
 opts = [
     cfg.BoolOpt('floating', default=False),
+    cfg.BoolOpt('test', default=True),
     cfg.IntOpt('number', default=1),
     cfg.IntOpt('parallel', default=1),
     cfg.StrOpt('cloud', help='Cloud name in clouds.yaml', default='testbed'),
@@ -31,20 +32,21 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO, date
 def run(x, image, flavor, network, user_data):
     name = "%s-%d" % (CONF.prefix, x)
     logging.info("Creating server %s" % name)
+
     server = cloud.compute.create_server(
         availability_zone=CONF.zone,
         name=name, image_id=image.id, flavor_id=flavor.id,
-        networks=[{"uuid": network.id}], user_data=b64_user_data)
+        networks=[{"uuid": network.id}], user_data=user_data)
 
     logging.info("Waiting for server %s" % server.id)
     server = cloud.compute.wait_for_server(server)
 
-    logging.info("Waiting for running tests on %s" % server.id)
+    logging.info("Waiting for server %s" % server.id)
     while True:
-        time.sleep(5.0)
         console = cloud.compute.get_server_console_output(server)
         if "DONE DONE DONE" in str(console):
             break
+        time.sleep(5.0)
 
     logging.info("Deleting server %s" % server.id)
     cloud.compute.delete_server(server)
@@ -54,13 +56,20 @@ def run(x, image, flavor, network, user_data):
 
 cloud = openstack.connect(cloud=CONF.cloud)
 
-user_data = """
-#cloud-config
-runcmd:
- - [ sh, -xc, "dd if=/dev/zero of=/tmp/laptop.bin bs=128M count=8 oflag=direct" ]
- - [ sh, -xc, "sleep 10" ]
- - [ sh, -xc, "echo $(date) ': DONE DONE DONE'" ]
-"""
+if CONF.test:
+    user_data = """
+    #cloud-config
+    runcmd:
+     - [ sh, -xc, "dd if=/dev/zero of=/tmp/laptop.bin bs=128M count=8 oflag=direct" ]
+     - [ sh, -xc, "sleep 10" ]
+     - [ sh, -xc, "echo $(date) ': DONE DONE DONE'" ]
+    """
+else:
+    user_data = """
+    #cloud-config
+    runcmd:
+     - [ sh, -xc, "echo $(date) ': DONE DONE DONE'" ]
+    """
 b64_user_data = base64.b64encode(user_data.encode('utf-8')).decode('utf-8')
 
 logging.info("Checking flavor %s" % CONF.flavor)
@@ -78,7 +87,7 @@ logging.info("network.id = %s" % network.id)
 pool = ThreadPoolExecutor(max_workers=CONF.parallel)
 futures = []
 for x in range(CONF.number):
-    futures.append(pool.submit(run, x, image, flavor, network, user_data))
+    futures.append(pool.submit(run, x, image, flavor, network, b64_user_data))
 
 for x in as_completed(futures):
     logging.info("Server %s finished" % x.result())

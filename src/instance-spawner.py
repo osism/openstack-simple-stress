@@ -17,7 +17,7 @@ opts = [
     cfg.StrOpt('flavor', default='1C-1GB-10GB'),
     cfg.StrOpt('image', default='Ubuntu 18.04'),
     cfg.StrOpt('keypair'),
-    cfg.StrOpt('network', default='net-to-public-testbed'),
+    cfg.StrOpt('network', default='net-to-external-testbed'),
     cfg.StrOpt('prefix', default='test'),
     cfg.StrOpt('zone', help='Availability zone to use', default='south-2'),
 ]

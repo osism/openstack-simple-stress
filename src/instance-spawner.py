@@ -54,7 +54,7 @@ def run(x, image, flavor, network, user_data):
     volumes = []
     if CONF.volume:
         for x in range(CONF.volume_number):
-            volume_name = "volume-%d" % x
+            volume_name = "%s-volume-%d" % (name, x)
 
             logging.info("Creating volume %s for server %s" % (volume_name, server.id))
             volume = cloud.block_storage.create_volume(

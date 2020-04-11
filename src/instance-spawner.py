@@ -12,8 +12,11 @@ CONF = cfg.CONF
 opts = [
     cfg.BoolOpt('floating', default=False),
     cfg.BoolOpt('test', default=True),
+    cfg.BoolOpt('volume', default=False),
     cfg.IntOpt('number', default=1),
     cfg.IntOpt('parallel', default=1),
+    cfg.IntOpt('volume-number', default=2),
+    cfg.IntOpt('volume-size', default=1),
     cfg.StrOpt('cloud', help='Cloud name in clouds.yaml', default='testbed'),
     cfg.StrOpt('flavor', default='1C-1GB-10GB'),
     cfg.StrOpt('image', default='Ubuntu 18.04'),
@@ -39,7 +42,7 @@ def run(x, image, flavor, network, user_data):
         networks=[{"uuid": network.id}], user_data=user_data)
 
     logging.info("Waiting for server %s" % server.id)
-    server = cloud.compute.wait_for_server(server)
+    server = cloud.compute.wait_for_server(server, interval=5, wait=240)
 
     logging.info("Waiting for server %s" % server.id)
     while True:
@@ -48,8 +51,38 @@ def run(x, image, flavor, network, user_data):
             break
         time.sleep(5.0)
 
+    volumes = []
+    if CONF.volume:
+        for x in range(CONF.volume_number):
+            volume_name = "volume-%d" % x
+
+            logging.info("Creating volume %s for server %s" % (volume_name, server.id))
+            volume = cloud.block_storage.create_volume(
+                availability_zone=CONF.zone,
+                name=volume_name, size=CONF.volume_size
+            )
+
+            logging.info("Waiting for volume %s" % volume.id)
+            volume = cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=240)
+
+            volumes.append(volume)
+
+        for volume in volumes:
+            logging.info("Attaching volume %s to server %s" % (volume.id, server.id))
+            cloud.attach_volume(server, volume)
+
     logging.info("Deleting server %s" % server.id)
     cloud.compute.delete_server(server)
+
+    logging.info("Waiting for deletion of server %s" % server.id)
+    cloud.compute.wait_for_delete(server)
+
+    for volume in volumes:
+        logging.info("Deleting volume %s from server %s" % (volume.id, server.id))
+        cloud.block_storage.delete_volume(volume)
+
+        logging.info("Waiting for deletion of volume %s" % volume.id)
+        cloud.block_storage.wait_for_delete(volume)
 
     return server.id
 

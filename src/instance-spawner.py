@@ -42,7 +42,7 @@ def run(x, image, flavor, network, user_data):
         networks=[{"uuid": network.id}], user_data=user_data)
 
     logging.info("Waiting for server %s" % server.id)
-    server = cloud.compute.wait_for_server(server, interval=5, wait=240)
+    cloud.compute.wait_for_server(server, interval=5, wait=240)
 
     logging.info("Waiting for test results of %s" % server.id)
     while True:
@@ -63,7 +63,7 @@ def run(x, image, flavor, network, user_data):
             )
 
             logging.info("Waiting for volume %s" % volume.id)
-            volume = cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=240)
+            cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=240)
 
             volumes.append(volume)
 

@@ -44,7 +44,7 @@ def run(x, image, flavor, network, user_data):
     logging.info("Waiting for server %s" % server.id)
     cloud.compute.wait_for_server(server, interval=5, wait=240)
 
-    logging.info("Waiting for test results of %s" % server.id)
+    logging.info("Waiting for boot / test results of %s" % server.id)
     while True:
         console = cloud.compute.get_server_console_output(server)
         if "DONE DONE DONE" in str(console):

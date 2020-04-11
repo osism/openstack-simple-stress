@@ -15,6 +15,7 @@ opts = [
     cfg.BoolOpt('volume', default=False),
     cfg.IntOpt('number', default=1),
     cfg.IntOpt('parallel', default=1),
+    cfg.IntOpt('timeout', default=600),
     cfg.IntOpt('volume-number', default=2),
     cfg.IntOpt('volume-size', default=1),
     cfg.StrOpt('cloud', help='Cloud name in clouds.yaml', default='testbed'),
@@ -42,7 +43,7 @@ def run(x, image, flavor, network, user_data):
         networks=[{"uuid": network.id}], user_data=user_data)
 
     logging.info("Waiting for server %s" % server.id)
-    cloud.compute.wait_for_server(server, interval=5, wait=240)
+    cloud.compute.wait_for_server(server, interval=5, wait=CONF.timeout)
 
     logging.info("Waiting for boot / test results of %s" % server.id)
     while True:
@@ -63,7 +64,7 @@ def run(x, image, flavor, network, user_data):
             )
 
             logging.info("Waiting for volume %s" % volume.id)
-            cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=240)
+            cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=CONF.timeout)
 
             volumes.append(volume)
 
@@ -75,14 +76,14 @@ def run(x, image, flavor, network, user_data):
     cloud.compute.delete_server(server)
 
     logging.info("Waiting for deletion of server %s" % server.id)
-    cloud.compute.wait_for_delete(server)
+    cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
 
     for volume in volumes:
         logging.info("Deleting volume %s from server %s" % (volume.id, server.id))
         cloud.block_storage.delete_volume(volume)
 
         logging.info("Waiting for deletion of volume %s" % volume.id)
-        cloud.block_storage.wait_for_delete(volume)
+        cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
 
     return server.id
 

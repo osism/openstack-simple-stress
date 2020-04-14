@@ -10,6 +10,7 @@ from oslo_config import cfg
 PROJECT_NAME = "openstack-instance-spawner"
 CONF = cfg.CONF
 opts = [
+    cfg.BoolOpt('delete', default=True),
     cfg.BoolOpt('floating', default=False),
     cfg.BoolOpt('test', default=True),
     cfg.BoolOpt('volume', default=False),
@@ -30,7 +31,7 @@ opts = [
 CONF.register_cli_opts(opts)
 CONF(sys.argv[1:], project=PROJECT_NAME)
 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
 
 
 def run(x, image, flavor, network, user_data):
@@ -42,13 +43,15 @@ def run(x, image, flavor, network, user_data):
         name=name, image_id=image.id, flavor_id=flavor.id,
         networks=[{"uuid": network.id}], user_data=user_data)
 
-    logging.info("Waiting for server %s" % server.id)
+    logging.info("Waiting for server %s (%s)" % (server.id, name))
     cloud.compute.wait_for_server(server, interval=5, wait=CONF.timeout)
 
-    logging.info("Waiting for boot / test results of %s" % server.id)
+    logging.info("Waiting for boot / test results of %s (%s)" % (server.id, name))
     while True:
         console = cloud.compute.get_server_console_output(server)
-        if "DONE DONE DONE" in str(console):
+        if "Failed to run module scripts-user" in str(console):
+            logging.error("Failed tests for %s (%s)" % (server.id, name))
+        if "The system is finally up" in str(console):
             break
         time.sleep(5.0)
 
@@ -57,7 +60,7 @@ def run(x, image, flavor, network, user_data):
         for x in range(CONF.volume_number):
             volume_name = "%s-volume-%d" % (name, x)
 
-            logging.info("Creating volume %s for server %s" % (volume_name, server.id))
+            logging.info("Creating volume %s for server %s (%s)" % (volume_name, server.id, name))
             volume = cloud.block_storage.create_volume(
                 availability_zone=CONF.zone,
                 name=volume_name, size=CONF.volume_size
@@ -69,21 +72,26 @@ def run(x, image, flavor, network, user_data):
             volumes.append(volume)
 
         for volume in volumes:
-            logging.info("Attaching volume %s to server %s" % (volume.id, server.id))
+            logging.info("Attaching volume %s to server %s (%s)" % (volume.id, server.id, name))
             cloud.attach_volume(server, volume)
 
-    logging.info("Deleting server %s" % server.id)
-    cloud.compute.delete_server(server)
+    if CONF.delete:
+        logging.info("Deleting server %s (%s)" % (server.id, name))
+        cloud.compute.delete_server(server)
 
-    logging.info("Waiting for deletion of server %s" % server.id)
-    cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
+        logging.info("Waiting for deletion of server %s (%s)" % (server.id, name))
+        cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
 
-    for volume in volumes:
-        logging.info("Deleting volume %s from server %s" % (volume.id, server.id))
-        cloud.block_storage.delete_volume(volume)
+        for volume in volumes:
+            logging.info("Deleting volume %s from server %s (%s)" % (volume.id, server.id, name))
+            cloud.block_storage.delete_volume(volume)
 
-        logging.info("Waiting for deletion of volume %s" % volume.id)
-        cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
+            logging.info("Waiting for deletion of volume %s" % volume.id)
+            cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
+    else:
+        logging.info("Skipping deletion of server %s (%s)" % (server.id, name))
+        for volume in volumes:
+            logging.info("Skipping deletion of volume %s from server %s (%s)" % (volume.id, server.id, name))
 
     return server.id
 
@@ -91,19 +99,29 @@ def run(x, image, flavor, network, user_data):
 cloud = openstack.connect(cloud=CONF.cloud)
 
 if CONF.test:
-    user_data = """
-    #cloud-config
-    runcmd:
-     - [ sh, -xc, "dd if=/dev/zero of=/tmp/laptop.bin bs=128M count=8 oflag=direct" ]
-     - [ sh, -xc, "sleep 10" ]
-     - [ sh, -xc, "echo $(date) ': DONE DONE DONE'" ]
+    user_data_script = """
+      ping -c3 $(/sbin/ip route | awk '/default/ { print $3 }') || exit 1
+      dd if=/dev/zero of=/tmp/laptop.bin bs=128M count=8 oflag=direct
+      sleep 10
     """
 else:
-    user_data = """
-    #cloud-config
-    runcmd:
-     - [ sh, -xc, "echo $(date) ': DONE DONE DONE'" ]
+    user_data_script = """
+      ping -c3 $(/sbin/ip route | awk '/default/ { print $3 }') || exit 1
     """
+
+user_data = """
+#cloud-config
+write_files:
+  - content: |
+      #!/usr/bin/env bash
+      {user_data_script}
+    path: /root/run.sh
+    permissions: 0700
+runcmd:
+  - "/root/run.sh"
+final_message: "The system is finally up, after $UPTIME seconds"
+""".format(user_data_script=user_data_script)
+
 b64_user_data = base64.b64encode(user_data.encode('utf-8')).decode('utf-8')
 
 logging.info("Checking flavor %s" % CONF.flavor)

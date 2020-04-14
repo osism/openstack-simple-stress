@@ -35,8 +35,44 @@ CONF(sys.argv[1:], project=PROJECT_NAME)
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
 
 
-def run(x, image, flavor, network, user_data):
+def create(x, image, flavor, network, user_data):
     name = "%s-%d" % (CONF.prefix, x)
+    server = create_server(name, image, flavor, network, user_data)
+
+    volumes = []
+    if CONF.volume:
+        for x in range(CONF.volume_number):
+            volume = create_volume("%s-volume-%d" % (name, x))
+            volumes.append(volume)
+
+        for volume in volumes:
+            logging.info("Attaching volume %s to server %s (%s)" % (volume.id, server.id, name))
+            cloud.attach_volume(server, volume)
+
+    if CONF.delete:
+        delete(server, volumes)
+    else:
+        logging.info("Skipping deletion of server %s (%s)" % (server.id, name))
+        for volume in volumes:
+            logging.info("Skipping deletion of volume %s from server %s (%s)" % (volume.id, server.id, name))
+
+    return (server, volumes)
+
+
+def create_volume(name):
+    logging.info("Creating volume %s" % name)
+    volume = cloud.block_storage.create_volume(
+        availability_zone=CONF.zone,
+        name=name, size=CONF.volume_size
+    )
+
+    logging.info("Waiting for volume %s" % volume.id)
+    cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=CONF.timeout)
+
+    return volume
+
+
+def create_server(name, image, flavor, network, user_data):
     logging.info("Creating server %s" % name)
 
     server = cloud.compute.create_server(
@@ -56,34 +92,7 @@ def run(x, image, flavor, network, user_data):
             break
         time.sleep(5.0)
 
-    volumes = []
-    if CONF.volume:
-        for x in range(CONF.volume_number):
-            volume_name = "%s-volume-%d" % (name, x)
-
-            logging.info("Creating volume %s for server %s (%s)" % (volume_name, server.id, name))
-            volume = cloud.block_storage.create_volume(
-                availability_zone=CONF.zone,
-                name=volume_name, size=CONF.volume_size
-            )
-
-            logging.info("Waiting for volume %s" % volume.id)
-            cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=CONF.timeout)
-
-            volumes.append(volume)
-
-        for volume in volumes:
-            logging.info("Attaching volume %s to server %s (%s)" % (volume.id, server.id, name))
-            cloud.attach_volume(server, volume)
-
-    if CONF.delete:
-        delete(server, volumes)
-    else:
-        logging.info("Skipping deletion of server %s (%s)" % (server.id, name))
-        for volume in volumes:
-            logging.info("Skipping deletion of volume %s from server %s (%s)" % (volume.id, server.id, name))
-
-    return (server, volumes)
+    return server
 
 
 def delete(server, volumes):
@@ -142,12 +151,16 @@ network = cloud.get_network(CONF.network)
 logging.info("network.id = %s" % network.id)
 
 pool = ThreadPoolExecutor(max_workers=CONF.parallel)
-futures = []
+futures_create = []
 for x in range(CONF.number):
-    futures.append(pool.submit(run, x, image, flavor, network, b64_user_data))
+    futures_create.append(pool.submit(create, x, image, flavor, network, b64_user_data))
 
-for server, volumes in [x.result() for x in as_completed(futures)]:
+futures_delete = []
+for server, volumes in [x.result() for x in as_completed(futures_create)]:
     logging.info("Server %s finished" % server.id)
 
     if CONF.cleanup and not CONF.delete:
-        delete(server, volumes)
+        futures_delete.append(pool.submit(delete, server, volumes))
+
+for x in as_completed(futures_delete):
+    pass

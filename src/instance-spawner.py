@@ -10,6 +10,7 @@ from oslo_config import cfg
 PROJECT_NAME = "openstack-instance-spawner"
 CONF = cfg.CONF
 opts = [
+    cfg.BoolOpt('cleanup', default=True),
     cfg.BoolOpt('delete', default=True),
     cfg.BoolOpt('floating', default=False),
     cfg.BoolOpt('test', default=True),
@@ -76,24 +77,28 @@ def run(x, image, flavor, network, user_data):
             cloud.attach_volume(server, volume)
 
     if CONF.delete:
-        logging.info("Deleting server %s (%s)" % (server.id, name))
-        cloud.compute.delete_server(server)
-
-        logging.info("Waiting for deletion of server %s (%s)" % (server.id, name))
-        cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
-
-        for volume in volumes:
-            logging.info("Deleting volume %s from server %s (%s)" % (volume.id, server.id, name))
-            cloud.block_storage.delete_volume(volume)
-
-            logging.info("Waiting for deletion of volume %s" % volume.id)
-            cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
+        delete(server, volumes)
     else:
         logging.info("Skipping deletion of server %s (%s)" % (server.id, name))
         for volume in volumes:
             logging.info("Skipping deletion of volume %s from server %s (%s)" % (volume.id, server.id, name))
 
-    return server.id
+    return (server, volumes)
+
+
+def delete(server, volumes):
+    logging.info("Deleting server %s (%s)" % (server.id, server.name))
+    cloud.compute.delete_server(server)
+
+    logging.info("Waiting for deletion of server %s (%s)" % (server.id, server.name))
+    cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
+
+    for volume in volumes:
+        logging.info("Deleting volume %s from server %s (%s)" % (volume.id, server.id, server.name))
+        cloud.block_storage.delete_volume(volume)
+
+        logging.info("Waiting for deletion of volume %s" % volume.id)
+        cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
 
 
 cloud = openstack.connect(cloud=CONF.cloud)
@@ -141,5 +146,8 @@ futures = []
 for x in range(CONF.number):
     futures.append(pool.submit(run, x, image, flavor, network, b64_user_data))
 
-for x in as_completed(futures):
-    logging.info("Server %s finished" % x.result())
+for server, volumes in [x.result() for x in as_completed(futures)]:
+    logging.info("Server %s finished" % server.id)
+
+    if CONF.cleanup and not CONF.delete:
+        delete(server, volumes)

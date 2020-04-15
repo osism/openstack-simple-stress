@@ -11,10 +11,12 @@ PROJECT_NAME = "openstack-instance-spawner"
 CONF = cfg.CONF
 opts = [
     cfg.BoolOpt('cleanup', default=True),
+    cfg.BoolOpt('debug', default=False),
     cfg.BoolOpt('delete', default=True),
     cfg.BoolOpt('floating', default=False),
     cfg.BoolOpt('test', default=True),
     cfg.BoolOpt('volume', default=False),
+    cfg.IntOpt('interval', default=10),
     cfg.IntOpt('number', default=1),
     cfg.IntOpt('parallel', default=1),
     cfg.IntOpt('timeout', default=600),
@@ -33,6 +35,7 @@ CONF.register_cli_opts(opts)
 CONF(sys.argv[1:], project=PROJECT_NAME)
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
+openstack.enable_logging(debug=CONF.debug, http_debug=CONF.debug)
 
 
 def create(x, image, flavor, network, user_data):
@@ -49,6 +52,9 @@ def create(x, image, flavor, network, user_data):
             logging.info("Attaching volume %s to server %s (%s)" % (volume.id, server.id, name))
             cloud.attach_volume(server, volume)
 
+            logging.info("Refreshing details of %s (%s)" % (server.id, name))
+            server = cloud.compute.get_server(server.id)
+
     if CONF.delete:
         delete(server, volumes)
     else:
@@ -61,13 +67,14 @@ def create(x, image, flavor, network, user_data):
 
 def create_volume(name):
     logging.info("Creating volume %s" % name)
+
     volume = cloud.block_storage.create_volume(
         availability_zone=CONF.zone,
         name=name, size=CONF.volume_size
     )
 
     logging.info("Waiting for volume %s" % volume.id)
-    cloud.block_storage.wait_for_status(volume, status="available", interval=5, wait=CONF.timeout)
+    cloud.block_storage.wait_for_status(volume, status="available", interval=CONF.interval, wait=CONF.timeout)
 
     return volume
 
@@ -81,7 +88,7 @@ def create_server(name, image, flavor, network, user_data):
         networks=[{"uuid": network.id}], user_data=user_data)
 
     logging.info("Waiting for server %s (%s)" % (server.id, name))
-    cloud.compute.wait_for_server(server, interval=5, wait=CONF.timeout)
+    cloud.compute.wait_for_server(server, interval=CONF.interval, wait=CONF.timeout)
 
     logging.info("Waiting for boot / test results of %s (%s)" % (server.id, name))
     while True:
@@ -100,14 +107,14 @@ def delete(server, volumes):
     cloud.compute.delete_server(server)
 
     logging.info("Waiting for deletion of server %s (%s)" % (server.id, server.name))
-    cloud.compute.wait_for_delete(server, interval=5, wait=CONF.timeout)
+    cloud.compute.wait_for_delete(server, interval=CONF.interval, wait=CONF.timeout)
 
     for volume in volumes:
         logging.info("Deleting volume %s from server %s (%s)" % (volume.id, server.id, server.name))
         cloud.block_storage.delete_volume(volume)
 
         logging.info("Waiting for deletion of volume %s" % volume.id)
-        cloud.block_storage.wait_for_delete(volume, interval=5, wait=CONF.timeout)
+        cloud.block_storage.wait_for_delete(volume, interval=CONF.interval, wait=CONF.timeout)
 
 
 cloud = openstack.connect(cloud=CONF.cloud)

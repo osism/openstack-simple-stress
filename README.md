@@ -1,11 +1,9 @@
-# openstack-testsuite
-
-[![Build Status](https://travis-ci.org/betacloud/openstack-testsuite.svg?branch=master)](https://travis-ci.org/betacloud/openstack-testsuite)
+# openstack-stress
 
 ## Usage
 
 ```
-$ python3 src/instance-spawner.py --parallel 2 --number 2
+$ tox -e stress -- --parallel 2 --number 2
 2020-03-24 14:05:56 - Checking flavor 1C-1GB-10GB
 2020-03-24 14:06:02 - flavor.id = 30
 2020-03-24 14:06:02 - Checking image Ubuntu 18.04

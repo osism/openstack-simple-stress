@@ -7,7 +7,7 @@ import time
 import openstack
 from oslo_config import cfg
 
-PROJECT_NAME = "openstack-instance-spawner"
+PROJECT_NAME = "openstack-stress"
 CONF = cfg.CONF
 opts = [
     cfg.BoolOpt('cleanup', default=True),

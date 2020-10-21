@@ -44,6 +44,44 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
 openstack.enable_logging(debug=CONF.debug, http_debug=CONF.debug)
 
 
+# source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
+def patch_http_connection_pool(**constructor_kwargs):
+    """
+    This allows to override the default parameters of the
+    HTTPConnectionPool constructor.
+    For example, to increase the poolsize to fix problems
+    with "HttpConnectionPool is full, discarding connection"
+    call this function with maxsize=16 (or whatever size
+    you want to give to the connection pool)
+    """
+    from urllib3 import connectionpool, poolmanager
+
+    class MyHTTPConnectionPool(connectionpool.HTTPConnectionPool):
+        def __init__(self, *args, **kwargs):
+            kwargs.update(constructor_kwargs)
+            super(MyHTTPConnectionPool, self).__init__(*args, **kwargs)
+    poolmanager.pool_classes_by_scheme['http'] = MyHTTPConnectionPool
+
+
+# source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
+def patch_https_connection_pool(**constructor_kwargs):
+    """
+    This allows to override the default parameters of the
+    HTTPConnectionPool constructor.
+    For example, to increase the poolsize to fix problems
+    with "HttpSConnectionPool is full, discarding connection"
+    call this function with maxsize=16 (or whatever size
+    you want to give to the connection pool)
+    """
+    from urllib3 import connectionpool, poolmanager
+
+    class MyHTTPSConnectionPool(connectionpool.HTTPSConnectionPool):
+        def __init__(self, *args, **kwargs):
+            kwargs.update(constructor_kwargs)
+            super(MyHTTPSConnectionPool, self).__init__(*args, **kwargs)
+    poolmanager.pool_classes_by_scheme['https'] = MyHTTPSConnectionPool
+
+
 def create(x, image, flavor, network, user_data):
     name = "%s-%d" % (CONF.prefix, x)
     server = create_server(name, image, flavor, network, user_data)
@@ -132,6 +170,9 @@ def delete(server, volumes):
         cloud.block_storage.wait_for_delete(volume, interval=CONF.interval,
                                             wait=CONF.timeout)
 
+
+patch_http_connection_pool(maxsize=CONF.parallel)
+patch_https_connection_pool(maxsize=CONF.parallel)
 
 cloud = openstack.connect(cloud=CONF.cloud)
 

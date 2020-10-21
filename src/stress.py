@@ -28,7 +28,9 @@ opts = [
     cfg.StrOpt('keypair'),
     cfg.StrOpt('network', default='net-to-external-testbed'),
     cfg.StrOpt('prefix', default='test'),
-    cfg.StrOpt('zone', help='Availability zone to use', default='south-2'),
+    cfg.StrOpt('compute-zone', help='Compute availability zone to use', default='south-2'),
+    cfg.StrOpt('network-zone', help='Network availability zone to use', default='south'),
+    cfg.StrOpt('storage-zone', help='Storage availability zone to use', default='south-2'),
 ]
 
 CONF.register_cli_opts(opts)
@@ -69,7 +71,7 @@ def create_volume(name):
     logging.info("Creating volume %s" % name)
 
     volume = cloud.block_storage.create_volume(
-        availability_zone=CONF.zone,
+        availability_zone=CONF.storage_zone,
         name=name, size=CONF.volume_size
     )
 
@@ -83,7 +85,7 @@ def create_server(name, image, flavor, network, user_data):
     logging.info("Creating server %s" % name)
 
     server = cloud.compute.create_server(
-        availability_zone=CONF.zone,
+        availability_zone=CONF.compute_zone,
         name=name, image_id=image.id, flavor_id=flavor.id,
         networks=[{"uuid": network.id}], user_data=user_data)
 

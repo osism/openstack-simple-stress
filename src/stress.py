@@ -24,7 +24,7 @@ opts = [
     cfg.IntOpt('volume-size', default=1),
     cfg.StrOpt('cloud', help='Cloud name in clouds.yaml', default='testbed'),
     cfg.StrOpt('flavor', default='1C-1GB-10GB'),
-    cfg.StrOpt('image', default='Ubuntu 18.04'),
+    cfg.StrOpt('image', default='Ubuntu 20.04'),
     cfg.StrOpt('keypair'),
     cfg.StrOpt('network', default='net-to-external-testbed'),
     cfg.StrOpt('prefix', default='test'),

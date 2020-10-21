@@ -1,12 +1,16 @@
 # openstack-simple-stress
 
+A tool to perform simple load tests on an OpenStack environment. For use by integrators
+when setting up new environments or for rapid problem analysis. Rally and Tempest are
+used for real tests and regular checks.
+
 ## Usage
 
 ```
 $ tox -e stress -- --parallel 2 --number 2
 2020-03-24 14:05:56 - Checking flavor 1C-1GB-10GB
 2020-03-24 14:06:02 - flavor.id = 30
-2020-03-24 14:06:02 - Checking image Ubuntu 18.04
+2020-03-24 14:06:02 - Checking image Ubuntu 20.04
 2020-03-24 14:06:04 - image.id = f0e2d7ab-5534-40f4-887f-6c9a43a2a043
 2020-03-24 14:06:04 - Checking network net-to-public-testbed
 2020-03-24 14:06:04 - network.id = b11ddb33-a084-4c87-89c7-aa4f9a73b173

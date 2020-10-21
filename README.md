@@ -1,4 +1,4 @@
-# openstack-stress
+# openstack-simple-stress
 
 ## Usage
 

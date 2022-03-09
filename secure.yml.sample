@@ -1,5 +1,5 @@
 ---
 clouds:
-  service:
+  simple-stress:
     auth:
       password: password

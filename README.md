@@ -7,7 +7,7 @@ used for real tests and regular checks.
 ## Usage
 
 ```
-$ tox -e stress -- --parallel 2 --number 2
+$ tox -- --parallel 2 --number 2
 2020-03-24 14:05:56 - Checking flavor 1C-1GB-10GB
 2020-03-24 14:06:02 - flavor.id = 30
 2020-03-24 14:06:02 - Checking image Ubuntu 20.04

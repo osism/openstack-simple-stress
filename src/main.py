@@ -148,7 +148,7 @@ def create_server(name, image, flavor, network, user_data):
                 logging.error("Failed tests for %s (%s)" % (server.id, name))
             if "The system is finally up" in str(console):
                 break
-            time.sleep(5.0)
+            time.sleep(1.0)
 
     return server
 

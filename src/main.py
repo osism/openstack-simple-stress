@@ -14,7 +14,6 @@ opts = [
     cfg.BoolOpt('debug', default=False),
     cfg.BoolOpt('delete', default=True),
     cfg.BoolOpt('floating', default=False),
-    cfg.BoolOpt('test', default=False),
     cfg.BoolOpt('volume', default=False),
     cfg.IntOpt('interval', default=10),
     cfg.IntOpt('number', default=1),
@@ -176,29 +175,10 @@ patch_https_connection_pool(maxsize=CONF.parallel)
 
 cloud = openstack.connect(cloud=CONF.cloud)
 
-if CONF.test:
-    user_data_script = """
-      ping -c3 $(/sbin/ip route | awk '/default/ { print $3 }') || exit 1
-      dd if=/dev/zero of=/tmp/laptop.bin bs=128M count=8 oflag=direct
-      sleep 10
-    """
-else:
-    user_data_script = """
-      ping -c3 $(/sbin/ip route | awk '/default/ { print $3 }') || exit 1
-    """
-
 user_data = """
 #cloud-config
-write_files:
-  - content: |
-      #!/usr/bin/env bash
-      {user_data_script}
-    path: /root/run.sh
-    permissions: 0700
-runcmd:
-  - "/root/run.sh"
 final_message: "The system is finally up, after $UPTIME seconds"
-""".format(user_data_script=user_data_script)
+"""
 
 b64_user_data = base64.b64encode(user_data.encode('utf-8')).decode('utf-8')
 

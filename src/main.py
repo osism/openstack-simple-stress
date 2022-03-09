@@ -22,7 +22,7 @@ opts = [
     cfg.IntOpt('timeout', default=600),
     cfg.IntOpt('volume-number', default=1),
     cfg.IntOpt('volume-size', default=1),
-    cfg.StrOpt('cloud', help='Cloud name in clouds.yaml', default='simple-stress'),
+    cfg.StrOpt('cloud', help='Cloud name', default='simple-stress'),
     cfg.StrOpt('flavor', default='SCS-1L:1:5'),
     cfg.StrOpt('image', default='Ubuntu 20.04'),
     cfg.StrOpt('keypair'),

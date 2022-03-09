@@ -1,4 +1,4 @@
 PyYAML==5.4
 openstacksdk==0.61.0
 os-client-config==2.1.0
-oslo.config==8.3.2
+oslo.config==8.8.0

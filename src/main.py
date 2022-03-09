@@ -15,6 +15,7 @@ opts = [
     cfg.BoolOpt('delete', default=True),
     cfg.BoolOpt('floating', default=False),
     cfg.BoolOpt('volume', default=False),
+    cfg.BoolOpt('wait', default=True),
     cfg.IntOpt('interval', default=10),
     cfg.IntOpt('number', default=1),
     cfg.IntOpt('parallel', default=1),
@@ -138,15 +139,16 @@ def create_server(name, image, flavor, network, user_data):
     cloud.compute.wait_for_server(server, interval=CONF.interval,
                                   wait=CONF.timeout)
 
-    logging.info("Waiting for boot / test results of %s (%s)" %
-                 (server.id, name))
-    while True:
-        console = cloud.compute.get_server_console_output(server)
-        if "Failed to run module scripts-user" in str(console):
-            logging.error("Failed tests for %s (%s)" % (server.id, name))
-        if "The system is finally up" in str(console):
-            break
-        time.sleep(5.0)
+    if CONF.wait:
+        logging.info("Waiting for boot / test results of %s (%s)" %
+                     (server.id, name))
+        while True:
+            console = cloud.compute.get_server_console_output(server)
+            if "Failed to run module scripts-user" in str(console):
+                logging.error("Failed tests for %s (%s)" % (server.id, name))
+            if "The system is finally up" in str(console):
+                break
+            time.sleep(5.0)
 
     return server
 

@@ -196,6 +196,8 @@ logging.info("Checking network %s" % CONF.network)
 network = cloud.get_network(CONF.network)
 logging.info("network.id = %s" % network.id)
 
+start = time.time()
+
 pool = ThreadPoolExecutor(max_workers=CONF.parallel)
 futures_create = []
 for x in range(CONF.number):
@@ -211,3 +213,7 @@ for server, volumes in [x.result() for x in as_completed(futures_create)]:
 
 for x in as_completed(futures_delete):
     pass
+
+end = time.time()
+
+logging.info(f"Runtime: {(end-start):.4f}s")

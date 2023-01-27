@@ -1,9 +1,9 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
 import sys
 import time
 
+from loguru import logger
 import openstack
 from oslo_config import cfg
 
@@ -36,11 +36,6 @@ opts = [
 CONF.register_cli_opts(opts)
 CONF(sys.argv[1:], project=PROJECT_NAME)
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 openstack.enable_logging(debug=CONF.debug, http_debug=CONF.debug)
 
 
@@ -95,20 +90,20 @@ def create(x, image, flavor, network, user_data):
             volumes.append(volume)
 
         for volume in volumes:
-            logging.info(
+            logger.info(
                 "Attaching volume %s to server %s (%s)" % (volume.id, server.id, name)
             )
             cloud.attach_volume(server, volume)
 
-            logging.info("Refreshing details of %s (%s)" % (server.id, name))
+            logger.info("Refreshing details of %s (%s)" % (server.id, name))
             server = cloud.compute.get_server(server.id)
 
     if CONF.delete:
         delete(server, volumes)
     else:
-        logging.info("Skipping deletion of server %s (%s)" % (server.id, name))
+        logger.info("Skipping deletion of server %s (%s)" % (server.id, name))
         for volume in volumes:
-            logging.info(
+            logger.info(
                 "Skipping deletion of volume %s from server %s (%s)"
                 % (volume.id, server.id, name)
             )
@@ -117,13 +112,13 @@ def create(x, image, flavor, network, user_data):
 
 
 def create_volume(name):
-    logging.info("Creating volume %s" % name)
+    logger.info("Creating volume %s" % name)
 
     volume = cloud.block_storage.create_volume(
         availability_zone=CONF.storage_zone, name=name, size=CONF.volume_size
     )
 
-    logging.info("Waiting for volume %s" % volume.id)
+    logger.info("Waiting for volume %s" % volume.id)
     cloud.block_storage.wait_for_status(
         volume, status="available", interval=CONF.interval, wait=CONF.timeout
     )
@@ -132,7 +127,7 @@ def create_volume(name):
 
 
 def create_server(name, image, flavor, network, user_data):
-    logging.info("Creating server %s" % name)
+    logger.info("Creating server %s" % name)
 
     server = cloud.compute.create_server(
         availability_zone=CONF.compute_zone,
@@ -143,15 +138,15 @@ def create_server(name, image, flavor, network, user_data):
         user_data=user_data,
     )
 
-    logging.info("Waiting for server %s (%s)" % (server.id, name))
+    logger.info("Waiting for server %s (%s)" % (server.id, name))
     cloud.compute.wait_for_server(server, interval=CONF.interval, wait=CONF.timeout)
 
     if CONF.wait:
-        logging.info("Waiting for boot / test results of %s (%s)" % (server.id, name))
+        logger.info("Waiting for boot / test results of %s (%s)" % (server.id, name))
         while True:
             console = cloud.compute.get_server_console_output(server)
             if "Failed to run module scripts-user" in str(console):
-                logging.error("Failed tests for %s (%s)" % (server.id, name))
+                logger.error("Failed tests for %s (%s)" % (server.id, name))
             if "The system is finally up" in str(console):
                 break
             time.sleep(1.0)
@@ -160,20 +155,20 @@ def create_server(name, image, flavor, network, user_data):
 
 
 def delete(server, volumes):
-    logging.info("Deleting server %s (%s)" % (server.id, server.name))
+    logger.info("Deleting server %s (%s)" % (server.id, server.name))
     cloud.compute.delete_server(server)
 
-    logging.info("Waiting for deletion of server %s (%s)" % (server.id, server.name))
+    logger.info("Waiting for deletion of server %s (%s)" % (server.id, server.name))
     cloud.compute.wait_for_delete(server, interval=CONF.interval, wait=CONF.timeout)
 
     for volume in volumes:
-        logging.info(
+        logger.info(
             "Deleting volume %s from server %s (%s)"
             % (volume.id, server.id, server.name)
         )
         cloud.block_storage.delete_volume(volume)
 
-        logging.info("Waiting for deletion of volume %s" % volume.id)
+        logger.info("Waiting for deletion of volume %s" % volume.id)
         cloud.block_storage.wait_for_delete(
             volume, interval=CONF.interval, wait=CONF.timeout
         )
@@ -191,17 +186,17 @@ final_message: "The system is finally up, after $UPTIME seconds"
 
 b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
 
-logging.info("Checking flavor %s" % CONF.flavor)
+logger.info("Checking flavor %s" % CONF.flavor)
 flavor = cloud.get_flavor(CONF.flavor)
-logging.info("flavor.id = %s" % flavor.id)
+logger.info("flavor.id = %s" % flavor.id)
 
-logging.info("Checking image %s" % CONF.image)
+logger.info("Checking image %s" % CONF.image)
 image = cloud.get_image(CONF.image)
-logging.info("image.id = %s" % image.id)
+logger.info("image.id = %s" % image.id)
 
-logging.info("Checking network %s" % CONF.network)
+logger.info("Checking network %s" % CONF.network)
 network = cloud.get_network(CONF.network)
-logging.info("network.id = %s" % network.id)
+logger.info("network.id = %s" % network.id)
 
 start = time.time()
 
@@ -212,7 +207,7 @@ for x in range(CONF.number):
 
 futures_delete = []
 for server, volumes in [x.result() for x in as_completed(futures_create)]:
-    logging.info("Server %s finished" % server.id)
+    logger.info("Server %s finished" % server.id)
 
     if CONF.cleanup and not CONF.delete:
         futures_delete.append(pool.submit(delete, server, volumes))
@@ -222,4 +217,4 @@ for x in as_completed(futures_delete):
 
 end = time.time()
 
-logging.info(f"Runtime: {(end-start):.4f}s")
+logger.info(f"Runtime: {(end-start):.4f}s")

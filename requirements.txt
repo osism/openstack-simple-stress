@@ -1,5 +1,5 @@
 PyYAML==6.0
 loguru==0.7.0
-openstacksdk==0.103.0
+openstacksdk==1.1.0
 os-client-config==2.1.0
 oslo.config==9.1.1

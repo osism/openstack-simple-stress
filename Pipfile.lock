@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "d462781d35670cbc22b953d6d75923a844877cf412c4f1e50a1784d9ffceb76f"
+            "sha256": "f2141a204f318f740f8e489477c17a26c8117c3653737dc2b1f5cd8c37c9e13e"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -288,6 +288,7 @@
                 "sha256:b93aa30099fa6860d4727f1b81f8718e965bb96253fa190fab2077aaad6d15d3"
             ],
             "index": "pypi",
+            "markers": "python_version >= '3.5'",
             "version": "==0.7.0"
         },
         "netaddr": {
@@ -338,6 +339,7 @@
                 "sha256:844982ec09d4930cc389edb2dfad5aa55b07b41f3f2978cb4e43c5f40a469fa5"
             ],
             "index": "pypi",
+            "markers": "python_version >= '3.6'",
             "version": "==1.4.0"
         },
         "os-client-config": {
@@ -357,19 +359,20 @@
         },
         "oslo.config": {
             "hashes": [
-                "sha256:7cd56e0b41b04f64dbc42e83e8164d5ef03466390f1216fbda2cb0e1c535c22c",
-                "sha256:b07654b53d87792ae8e739962ad729c529c9938a118d891ece9ee31d59716bc9"
+                "sha256:b98e50b19161fc76f25905ff74043e239258a3ebe799a5f9070d285e3c039dee",
+                "sha256:ffeb01ca65a603d5525905f1a88a3319be09ce2c6ac376c4312aaec283095878"
             ],
             "index": "pypi",
-            "version": "==9.1.1"
+            "markers": "python_version >= '3.8'",
+            "version": "==9.2.0"
         },
         "oslo.i18n": {
             "hashes": [
-                "sha256:080fedf41b05d4dcd23a91d23ee2dea0863996e860a59695856269a42d939fc1",
-                "sha256:ed10686b75f7c607825177a669155f4e259ce39f6143a375f6359bbcaa4a35cd"
+                "sha256:4a7ee58c5aba57c3c6f49f3138b36f4b96fa5f93ddf3e41d4f19e8b343a8a470",
+                "sha256:e2b829f205bf1eb6204756cc34027d119494b62d271feee860bf816ca7a07ead"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==6.0.0"
+            "version": "==6.1.0"
         },
         "pbr": {
             "hashes": [
@@ -429,7 +432,7 @@
                 "sha256:fd1592b3fdf65fff2ad0004b5e363300ef59ced41c2e6b3a99d4089fa8c5435d",
                 "sha256:fd66fc5d0da6d9815ba2cebeb4205f95818ff4b79c3ebe268e75d961704af52f"
             ],
-            "index": "pypi",
+            "markers": "python_version >= '3.6'",
             "version": "==6.0.1"
         },
         "requests": {

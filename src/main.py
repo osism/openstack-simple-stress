@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys

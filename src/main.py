@@ -25,7 +25,7 @@ opts = [
     cfg.IntOpt("volume-number", default=1),
     cfg.IntOpt("volume-size", default=1),
     cfg.StrOpt("cloud", help="Cloud name", default="simple-stress"),
-    cfg.StrOpt("flavor", default="SCS-1L-1-5"),
+    cfg.StrOpt("flavor", default="SCS-1V-1-10"),
     cfg.StrOpt("image", default="Ubuntu 22.04"),
     cfg.StrOpt("keypair"),
     cfg.StrOpt("network", default="simple-stress"),

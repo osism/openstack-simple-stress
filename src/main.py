@@ -38,6 +38,14 @@ opts = [
 CONF.register_cli_opts(opts)
 CONF(sys.argv[1:], project=PROJECT_NAME)
 
+log_fmt = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
+    "<level>{message}</level>"
+)
+
+logger.remove()
+logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
+
 openstack.enable_logging(debug=CONF.debug, http_debug=CONF.debug)
 
 

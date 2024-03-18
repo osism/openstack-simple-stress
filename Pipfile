@@ -9,8 +9,3 @@ loguru = "==0.7.2"
 openstacksdk = "==3.0.0"
 os-client-config = "==2.1.0"
 "oslo.config" = "==9.4.0"
-
-[dev-packages]
-
-[requires]
-python_version = "3.10"

@@ -1,0 +1,62 @@
+---
+- name: Pre integration test play
+  hosts: all
+
+  vars:
+    zuul_work_dir: "{{ zuul.project.src_dir }}"
+
+  roles:
+    - role: ensure-tox
+    - role: devstack
+      vars:
+        # yamllint disable-line rule:line-length
+        devstack_services: "keystone nova n-api n-cpu n-cond n-sch n-novnc n-api-meta rabbit placement-api placement-client g-api ovn-controller ovn-northd ovs-vswitchd ovsdb-server q-svc q-ovn-metadata-agent"
+        devstack_use_fake_driver: true
+
+  tasks:
+    - name: Copy clouds.yml configuration file
+      ansible.builtin.copy:
+        src: "{{ zuul_work_dir }}/.clouds.yml"
+        dest: "{{ zuul_work_dir }}/clouds.yml"
+        remote_src: true
+        mode: '0644'
+        owner: zuul
+        group: zuul
+
+    - name: Print openstack CLI version
+      ansible.builtin.command: openstack --version
+      failed_when: false
+
+    - name: Create expected flavor
+      # yamllint disable-line rule:line-length
+      ansible.builtin.command: openstack --os-cloud openstack flavor create SCS-1V-1-10 --id SCS-1V-1-10 --ram 1024 --disk 10 --vcpus 1
+      args:
+        chdir: "{{ zuul_work_dir }}"
+
+    - name: Find image file
+      ansible.builtin.find:
+        paths: "{{ zuul_work_dir }}/devstack/files/"
+        file_type: file
+        patterns: "*.img"
+        recurse: false
+      register: find_image
+      # yamllint disable-line rule:line-length
+      failed_when: (find_image is not defined) or (find_image.files | length == 0)
+
+    - name: Create expected image
+      # yamllint disable-line rule:line-length
+      ansible.builtin.command: openstack --os-cloud openstack image create "cirros" --file ./devstack/files/{{ find_image.files[0].path | basename }} --disk-format qcow2 --container-format bare --public
+      args:
+        chdir: "{{ zuul_work_dir }}"
+
+    - name: Create expected network
+      # yamllint disable-line rule:line-length
+      ansible.builtin.command: "openstack --os-cloud openstack network create simple-stress"
+      args:
+        chdir: "{{ zuul_work_dir }}"
+
+    - name: Create expected subnet
+      # yamllint disable-line rule:line-length
+      ansible.builtin.command: "openstack --os-cloud openstack subnet create simple-stress-subnet --network simple-stress --subnet-range 10.100.1.0/24"
+      args:
+        chdir: "{{ zuul_work_dir }}"

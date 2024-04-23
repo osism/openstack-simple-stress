@@ -1,4 +1,13 @@
 ---
+- job:
+    name: openstack-simple-stress-test
+    pre-run: playbooks/pre-test.yml
+    run: playbooks/test.yml
+    timeout: 14400
+    roles:
+      - zuul: osism/zuul-jobs
+        name: devstack
+
 - project:
     merge-mode: squash-merge
     default-branch: main
@@ -6,6 +15,7 @@
       jobs:
         - flake8
         - mypy
+        - openstack-simple-stress-test
         - python-black
         - tox:
             vars:
@@ -15,6 +25,7 @@
       jobs:
         - flake8
         - mypy
+        - openstack-simple-stress-test
         - python-black
         - tox:
             vars:
@@ -24,6 +35,7 @@
       jobs:
         - flake8
         - mypy
+        - openstack-simple-stress-test
         - python-black
         - tox:
             vars:

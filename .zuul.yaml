@@ -1,19 +1,28 @@
 ---
+- job:
+    name: openstack-simple-stress-test
+    pre-run: playbooks/pre-test.yml
+    run: playbooks/test.yml
+    timeout: 7200
+
 - project:
     merge-mode: squash-merge
     default-branch: main
     check:
       jobs:
         - flake8
-        - yamllint
+        - openstack-simple-stress-test
         - python-black
+        - yamllint
     gate:
       jobs:
         - flake8
-        - yamllint
+        - openstack-simple-stress-test
         - python-black
+        - yamllint
     periodic-daily:
       jobs:
         - flake8
-        - yamllint
+        - openstack-simple-stress-test
         - python-black
+        - yamllint

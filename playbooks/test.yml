@@ -1,0 +1,12 @@
+---
+- name: Stress test play
+  hosts: all
+
+  vars:
+    zuul_work_dir: "{{ zuul.project.src_dir }}"
+
+  roles:
+    - role: tox
+      vars:
+# yamllint disable-line rule:line-length
+        tox_extra_args: -- --cloud openstack --image cirros --debug

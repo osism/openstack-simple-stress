@@ -1,0 +1,100 @@
+# tasks file for devstack
+---
+- name: Install dependencies
+  ansible.builtin.include_role:
+    name: "{{ item }}"
+  loop:
+    - ensure-python
+    - ensure-pip
+
+- name: Create /opt/stack directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: zuul
+    group: zuul
+    mode: '0755'
+  loop:
+    - /opt/stack
+    - /opt/stack/data
+    - /opt/stack/logs
+    - /opt/stack/status
+
+- name: Run preparations
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      set -o xtrace
+      set -e
+
+      # NOTE: There is probably a better Zuul-like way to do this.
+      git clone --branch {{ devstack_release }} https://opendev.org/openstack/devstack.git
+
+      sudo apt-get update
+
+      # NOTE: https://github.com/EmilienM/devstack-action/blob/main/action.yaml
+      sudo apt-get remove --purge -y \
+          esl-erlang \
+          mysql-* \
+          postgresql* \
+          python3-pyasn1-modules \
+          python3-simplejson || true
+      sudo rm -rf /var/lib/mysql
+      sudo apt-get install -y --fix-missing \
+          erlang \
+          rabbitmq-server
+
+      python3 -m pip --no-cache-dir install -U 'pip==23.0.1'
+    chdir: "{{ zuul_work_dir }}"
+    executable: /bin/bash
+  changed_when: false
+
+- name: Prepare configuration
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      set -o xtrace
+      set -e
+
+      sudo cat << EOT > local.conf
+      [[local|localrc]]
+      ADMIN_PASSWORD={{ devstack_password }}
+      DATABASE_PASSWORD={{ devstack_password }}
+      RABBIT_PASSWORD={{ devstack_password }}
+      SERVICE_PASSWORD={{ devstack_password }}
+
+      HOST_IP=127.0.0.1
+      INSTALL_TEMPEST=False
+
+      EOT
+    chdir: "{{ zuul_work_dir }}/devstack"
+    executable: /bin/bash
+  changed_when: false
+
+- name: Run devstack
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      set -o xtrace
+      set -e
+
+      export MYSQL_GATHER_PERFORMANCE=False
+      bash stack.sh
+    chdir: "{{ zuul_work_dir }}/devstack"
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: Debug
+  ansible.builtin.shell:
+    cmd: |
+      ls -lah /opt/stack/logs
+      cat /opt/stack/logs/*
+    chdir: "{{ zuul_work_dir }}/devstack"
+    executable: /bin/bash
+  changed_when: false
+
+- name: Debug Fail
+  ansible.builtin.fail:
+    msg: Failed anyway

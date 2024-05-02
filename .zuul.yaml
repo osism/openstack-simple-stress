@@ -5,15 +5,18 @@
     check:
       jobs:
         - flake8
-        - yamllint
+        - mypy
         - python-black
+        - yamllint
     gate:
       jobs:
         - flake8
-        - yamllint
+        - mypy
         - python-black
+        - yamllint
     periodic-daily:
       jobs:
         - flake8
-        - yamllint
+        - mypy
         - python-black
+        - yamllint

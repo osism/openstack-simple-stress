@@ -9,6 +9,8 @@ from loguru import logger
 import openstack
 import typer
 
+from typing import List, Tuple
+
 log_fmt = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
     "<level>{message}</level>"
@@ -19,7 +21,7 @@ logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
 
 
 # source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
-def patch_http_connection_pool(**constructor_kwargs):
+def patch_http_connection_pool(**constructor_kwargs) -> None:
     """
     This allows to override the default parameters of the
     HTTPConnectionPool constructor.
@@ -39,7 +41,7 @@ def patch_http_connection_pool(**constructor_kwargs):
 
 
 # source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
-def patch_https_connection_pool(**constructor_kwargs):
+def patch_https_connection_pool(**constructor_kwargs) -> None:
     """
     This allows to override the default parameters of the
     HTTPConnectionPool constructor.
@@ -75,7 +77,9 @@ def create(
     storage_zone,
     volume_size,
     delete,
-):
+) -> Tuple[
+    openstack.compute.v2.server.Server, List[openstack.block_storage.v2.volume.Volume]
+]:
     name = f"{prefix}-{x}"
     server = create_server(
         os_cloud,
@@ -94,7 +98,12 @@ def create(
     if volume:
         for x in range(volume_number):
             volume = create_volume(
-                f"{name}-volume-{x}", storage_zone, volume_size, interval, timeout
+                os_cloud,
+                f"{name}-volume-{x}",
+                storage_zone,
+                volume_size,
+                interval,
+                timeout,
             )
             volumes.append(volume)
 
@@ -117,7 +126,9 @@ def create(
     return (server, volumes)
 
 
-def create_volume(os_cloud, name, storage_zone, volume_size, interval, timeout):
+def create_volume(
+    os_cloud, name, storage_zone, volume_size, interval, timeout
+) -> openstack.block_storage.v2.volume.Volume:
     logger.info(f"Creating volume {name}")
 
     volume = os_cloud.block_storage.create_volume(
@@ -143,7 +154,7 @@ def create_server(
     interval,
     timeout,
     wait,
-):
+) -> openstack.compute.v2.server.Server:
     logger.info(f"Creating server {name}")
 
     server = os_cloud.compute.create_server(
@@ -171,7 +182,7 @@ def create_server(
     return server
 
 
-def delete_server(os_cloud, server, volumes, interval, timeout):
+def delete_server(os_cloud, server, volumes, interval, timeout) -> None:
     logger.info(f"Deleting server {server.id} ({server.name})")
     os_cloud.compute.delete_server(server)
 
@@ -251,6 +262,7 @@ def run(
         futures_create.append(
             pool.submit(
                 create,
+                os_cloud,
                 prefix,
                 x,
                 os_image,
@@ -278,7 +290,7 @@ def run(
                 pool.submit(delete_server, os_cloud, server, volumes, interval, timeout)
             )
 
-    for x in as_completed(futures_delete):
+    for f in as_completed(futures_delete):
         pass
 
     end = time.time()

@@ -60,6 +60,15 @@ def patch_https_connection_pool(**constructor_kwargs) -> None:
     poolmanager.pool_classes_by_scheme["https"] = MyHTTPSConnectionPool
 
 
+class Meta:
+
+    def __init__(self, wait: bool, interval: int, timeout: int, delete: bool):
+        self.wait = wait
+        self.interval = interval
+        self.timeout = timeout
+        self.delete = delete
+
+
 class Cloud:
 
     def __init__(
@@ -83,7 +92,7 @@ class Cloud:
 class Instance:
 
     def __init__(
-        self, cloud: Cloud, name: str, user_data, compute_zone, interval, timeout, wait
+        self, cloud: Cloud, name: str, user_data: str, compute_zone: str, meta: Meta
     ):
         self.cloud = cloud
 
@@ -92,24 +101,21 @@ class Instance:
             name,
             user_data,
             compute_zone,
-            interval,
-            timeout,
-            wait,
+            meta,
         )
         self.server_name = name
 
         self.volumes: List[openstack.block_storage.v2.volume.Volume] = []
 
     def add_volume(
-        self, name: str, storage_zone, volume_size, interval, timeout
+        self, name: str, storage_zone: str, volume_size: int, meta: Meta
     ) -> None:
         volume = create_volume(
             self.cloud,
             name,
             storage_zone,
             volume_size,
-            interval,
-            timeout,
+            meta,
         )
         self.volumes.append(volume)
 
@@ -127,44 +133,39 @@ class Instance:
 def create(
     cloud: Cloud,
     name: str,
-    user_data,
-    compute_zone,
-    interval,
-    timeout,
-    wait,
-    volume,
-    volume_number,
-    storage_zone,
-    volume_size,
-    delete,
+    user_data: str,
+    compute_zone: str,
+    volume: bool,
+    volume_number: int,
+    storage_zone: str,
+    volume_size: int,
+    meta: Meta,
 ) -> Instance:
 
-    instance = Instance(cloud, name, user_data, compute_zone, interval, timeout, wait)
+    instance = Instance(cloud, name, user_data, compute_zone, meta)
 
     if volume:
         for x in range(volume_number):
-            instance.add_volume(
-                f"{name}-volume-{x}", storage_zone, volume_size, interval, timeout
-            )
+            instance.add_volume(f"{name}-volume-{x}", storage_zone, volume_size, meta)
 
     instance.attach_volumes()
 
-    if delete:
-        delete_server(instance, interval, timeout)
+    if meta.delete:
+        delete_server(instance, meta)
     else:
         logger.info(
             f"Skipping deletion of server {instance.server.id} ({instance.server_name})"
         )
-        for volume in instance.volumes:
+        for v in instance.volumes:
             logger.info(
-                f"Skipping deletion of volume {volume.id} from server {instance.server.id} ({instance.server_name})"
+                f"Skipping deletion of volume {v.id} from server {instance.server.id} ({instance.server_name})"
             )
 
     return instance
 
 
 def create_volume(
-    cloud: Cloud, name, storage_zone, volume_size, interval, timeout
+    cloud: Cloud, name: str, storage_zone: str, volume_size: int, meta: Meta
 ) -> openstack.block_storage.v2.volume.Volume:
     logger.info(f"Creating volume {name}")
 
@@ -174,7 +175,7 @@ def create_volume(
 
     logger.info(f"Waiting for volume {volume.id}")
     cloud.os_cloud.block_storage.wait_for_status(
-        volume, status="available", interval=interval, wait=timeout
+        volume, status="available", interval=meta.interval, wait=meta.timeout
     )
 
     return volume
@@ -182,12 +183,10 @@ def create_volume(
 
 def create_server(
     cloud: Cloud,
-    name,
-    user_data,
-    compute_zone,
-    interval,
-    timeout,
-    wait,
+    name: str,
+    user_data: str,
+    compute_zone: str,
+    meta: Meta,
 ) -> openstack.compute.v2.server.Server:
     logger.info(f"Creating server {name}")
 
@@ -201,9 +200,11 @@ def create_server(
     )
 
     logger.info(f"Waiting for server {server.id} ({name})")
-    cloud.os_cloud.compute.wait_for_server(server, interval=interval, wait=timeout)
+    cloud.os_cloud.compute.wait_for_server(
+        server, interval=meta.interval, wait=meta.timeout
+    )
 
-    if wait:
+    if meta.wait:
         logger.info(f"Waiting for boot / test results of {server.id} ({name})")
         while True:
             console = cloud.os_cloud.compute.get_server_console_output(server)
@@ -216,7 +217,7 @@ def create_server(
     return server
 
 
-def delete_server(instance: Instance, interval, timeout) -> None:
+def delete_server(instance: Instance, meta: Meta) -> None:
     logger.info(f"Deleting server {instance.server.id} ({instance.server.name})")
     instance.cloud.os_cloud.compute.delete_server(instance.server)
 
@@ -224,7 +225,7 @@ def delete_server(instance: Instance, interval, timeout) -> None:
         f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
     )
     instance.cloud.os_cloud.compute.wait_for_delete(
-        instance.server, interval=interval, wait=timeout
+        instance.server, interval=meta.interval, wait=meta.timeout
     )
 
     for volume in instance.volumes:
@@ -235,7 +236,7 @@ def delete_server(instance: Instance, interval, timeout) -> None:
 
         logger.info(f"Waiting for deletion of volume {volume.id}")
         instance.cloud.os_cloud.block_storage.wait_for_delete(
-            volume, interval=interval, wait=timeout
+            volume, interval=meta.interval, wait=meta.timeout
         )
 
 
@@ -268,6 +269,8 @@ def run(
         "nova", "--storage-zone", help="Storage availability zone to use"
     ),
 ) -> None:
+    meta = Meta(wait, interval, timeout, delete)
+
     openstack.enable_logging(debug=debug, http_debug=debug)
 
     patch_http_connection_pool(maxsize=parallel)
@@ -294,14 +297,11 @@ def run(
                 f"{prefix}-{x}",
                 b64_user_data,
                 compute_zone,
-                interval,
-                timeout,
-                wait,
                 volume,
                 volume_number,
                 storage_zone,
                 volume_size,
-                delete,
+                meta,
             )
         )
 
@@ -310,9 +310,7 @@ def run(
         logger.info(f"Server {instance.server.id} finished")
 
         if cleanup and not delete:
-            futures_delete.append(
-                pool.submit(delete_server, instance, interval, timeout)
-            )
+            futures_delete.append(pool.submit(delete_server, instance, meta))
 
     for f in as_completed(futures_delete):
         pass

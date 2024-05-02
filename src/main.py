@@ -9,7 +9,7 @@ from loguru import logger
 import openstack
 import typer
 
-from typing import List, Tuple
+from typing import List
 
 log_fmt = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
@@ -80,6 +80,50 @@ class Cloud:
         logger.info(f"network.id = {self.os_network.id}")
 
 
+class Instance:
+
+    def __init__(
+        self, cloud: Cloud, name: str, user_data, compute_zone, interval, timeout, wait
+    ):
+        self.cloud = cloud
+
+        self.server = create_server(
+            self.cloud,
+            name,
+            user_data,
+            compute_zone,
+            interval,
+            timeout,
+            wait,
+        )
+        self.server_name = name
+
+        self.volumes: List[openstack.block_storage.v2.volume.Volume] = []
+
+    def add_volume(
+        self, name: str, storage_zone, volume_size, interval, timeout
+    ) -> None:
+        volume = create_volume(
+            self.cloud,
+            name,
+            storage_zone,
+            volume_size,
+            interval,
+            timeout,
+        )
+        self.volumes.append(volume)
+
+    def attach_volumes(self) -> None:
+        for volume in self.volumes:
+            logger.info(
+                f"Attaching volume {volume.id} to server {self.server.id} ({self.server_name})"
+            )
+            self.cloud.os_cloud.attach_volume(self.server, volume)
+
+            logger.info(f"Refreshing details of {self.server.id} ({self.server_name})")
+            self.server = self.cloud.os_cloud.compute.get_server(self.server.id)
+
+
 def create(
     cloud: Cloud,
     name: str,
@@ -93,49 +137,30 @@ def create(
     storage_zone,
     volume_size,
     delete,
-) -> Tuple[
-    openstack.compute.v2.server.Server, List[openstack.block_storage.v2.volume.Volume]
-]:
-    server = create_server(
-        cloud,
-        name,
-        user_data,
-        compute_zone,
-        interval,
-        timeout,
-        wait,
-    )
+) -> Instance:
 
-    volumes = []
+    instance = Instance(cloud, name, user_data, compute_zone, interval, timeout, wait)
+
     if volume:
         for x in range(volume_number):
-            volume = create_volume(
-                cloud,
-                f"{name}-volume-{x}",
-                storage_zone,
-                volume_size,
-                interval,
-                timeout,
+            instance.add_volume(
+                f"{name}-volume-{x}", storage_zone, volume_size, interval, timeout
             )
-            volumes.append(volume)
 
-        for volume in volumes:
-            logger.info(f"Attaching volume {volume.id} to server {server.id} ({name})")
-            cloud.os_cloud.attach_volume(server, volume)
-
-            logger.info(f"Refreshing details of {server.id} ({name})")
-            server = cloud.os_cloud.compute.get_server(server.id)
+    instance.attach_volumes()
 
     if delete:
-        delete_server(cloud, server, volumes, interval, timeout)
+        delete_server(instance, interval, timeout)
     else:
-        logger.info(f"Skipping deletion of server {server.id} ({name})")
-        for volume in volumes:
+        logger.info(
+            f"Skipping deletion of server {instance.server.id} ({instance.server_name})"
+        )
+        for volume in instance.volumes:
             logger.info(
-                f"Skipping deletion of volume {volume.id} from server {server.id} ({name})"
+                f"Skipping deletion of volume {volume.id} from server {instance.server.id} ({instance.server_name})"
             )
 
-    return (server, volumes)
+    return instance
 
 
 def create_volume(
@@ -191,21 +216,25 @@ def create_server(
     return server
 
 
-def delete_server(cloud: Cloud, server, volumes, interval, timeout) -> None:
-    logger.info(f"Deleting server {server.id} ({server.name})")
-    cloud.os_cloud.compute.delete_server(server)
+def delete_server(instance: Instance, interval, timeout) -> None:
+    logger.info(f"Deleting server {instance.server.id} ({instance.server.name})")
+    instance.cloud.os_cloud.compute.delete_server(instance.server)
 
-    logger.info(f"Waiting for deletion of server {server.id} ({server.name})")
-    cloud.os_cloud.compute.wait_for_delete(server, interval=interval, wait=timeout)
+    logger.info(
+        f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
+    )
+    instance.cloud.os_cloud.compute.wait_for_delete(
+        instance.server, interval=interval, wait=timeout
+    )
 
-    for volume in volumes:
+    for volume in instance.volumes:
         logger.info(
-            f"Deleting volume {volume.id} from server {server.id} ({server.name})"
+            f"Deleting volume {volume.id} from server {instance.server.id} ({instance.server_name})"
         )
-        cloud.os_cloud.block_storage.delete_volume(volume)
+        instance.cloud.os_cloud.block_storage.delete_volume(volume)
 
         logger.info(f"Waiting for deletion of volume {volume.id}")
-        cloud.os_cloud.block_storage.wait_for_delete(
+        instance.cloud.os_cloud.block_storage.wait_for_delete(
             volume, interval=interval, wait=timeout
         )
 
@@ -277,12 +306,12 @@ def run(
         )
 
     futures_delete = []
-    for server, volumes in [x.result() for x in as_completed(futures_create)]:
-        logger.info(f"Server {server.id} finished")
+    for instance in [x.result() for x in as_completed(futures_create)]:
+        logger.info(f"Server {instance.server.id} finished")
 
         if cleanup and not delete:
             futures_delete.append(
-                pool.submit(delete_server, cloud, server, volumes, interval, timeout)
+                pool.submit(delete_server, instance, interval, timeout)
             )
 
     for f in as_completed(futures_delete):

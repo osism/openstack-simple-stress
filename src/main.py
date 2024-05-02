@@ -82,8 +82,7 @@ class Cloud:
 
 def create(
     cloud: Cloud,
-    prefix,
-    x,
+    name: str,
     user_data,
     compute_zone,
     interval,
@@ -97,7 +96,6 @@ def create(
 ) -> Tuple[
     openstack.compute.v2.server.Server, List[openstack.block_storage.v2.volume.Volume]
 ]:
-    name = f"{prefix}-{x}"
     server = create_server(
         cloud,
         name,
@@ -264,8 +262,7 @@ def run(
             pool.submit(
                 create,
                 cloud,
-                prefix,
-                x,
+                f"{prefix}-{x}",
                 b64_user_data,
                 compute_zone,
                 interval,

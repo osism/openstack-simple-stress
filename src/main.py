@@ -141,7 +141,7 @@ def create_server(name, image, flavor, network, user_data):
         name=name,
         image_id=image.id,
         flavor_id=flavor.id,
-        networks=[{"uuid": network.id}],
+        networks=[],
         user_data=user_data,
     )
 
@@ -200,9 +200,10 @@ logger.info(f"Checking image {CONF.image}")
 image = cloud.get_image(CONF.image)
 logger.info(f"image.id = {image.id}")
 
-logger.info(f"Checking network {CONF.network}")
-network = cloud.get_network(CONF.network)
-logger.info(f"network.id = {network.id}")
+# logger.info(f"Checking network {CONF.network}")
+# network = cloud.get_network(CONF.network)
+# logger.info(f"network.id = {network.id}")
+network = None
 
 start = time.time()
 

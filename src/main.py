@@ -7,36 +7,7 @@ import time
 
 from loguru import logger
 import openstack
-from oslo_config import cfg
-
-PROJECT_NAME = "openstack-simple-stress"
-CONF = cfg.CONF
-opts = [
-    cfg.BoolOpt("cleanup", default=True),
-    cfg.BoolOpt("debug", default=False),
-    cfg.BoolOpt("delete", default=True),
-    cfg.BoolOpt("floating", default=False),
-    cfg.BoolOpt("volume", default=False),
-    cfg.BoolOpt("wait", default=True),
-    cfg.IntOpt("interval", default=10),
-    cfg.IntOpt("number", default=1),
-    cfg.IntOpt("parallel", default=1),
-    cfg.IntOpt("timeout", default=600),
-    cfg.IntOpt("volume-number", default=1),
-    cfg.IntOpt("volume-size", default=1),
-    cfg.StrOpt("cloud", help="Cloud name", default="simple-stress"),
-    cfg.StrOpt("flavor", default="SCS-1V-1-10"),
-    cfg.StrOpt("image", default="Ubuntu 22.04"),
-    cfg.StrOpt("keypair"),
-    cfg.StrOpt("network", default="simple-stress"),
-    cfg.StrOpt("prefix", default="simple-stress"),
-    cfg.StrOpt("compute-zone", help="Compute availability zone to use", default="nova"),
-    cfg.StrOpt("network-zone", help="Network availability zone to use", default="nova"),
-    cfg.StrOpt("storage-zone", help="Storage availability zone to use", default="nova"),
-]
-
-CONF.register_cli_opts(opts)
-CONF(sys.argv[1:], project=PROJECT_NAME)
+import typer
 
 log_fmt = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
@@ -45,8 +16,6 @@ log_fmt = (
 
 logger.remove()
 logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
-
-openstack.enable_logging(debug=CONF.debug, http_debug=CONF.debug)
 
 
 # source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
@@ -89,25 +58,55 @@ def patch_https_connection_pool(**constructor_kwargs):
     poolmanager.pool_classes_by_scheme["https"] = MyHTTPSConnectionPool
 
 
-def create(x, image, flavor, network, user_data):
-    name = f"{CONF.prefix}-{x}"
-    server = create_server(name, image, flavor, network, user_data)
+def create(
+    os_cloud,
+    prefix,
+    x,
+    os_image,
+    os_flavor,
+    os_network,
+    user_data,
+    compute_zone,
+    interval,
+    timeout,
+    wait,
+    volume,
+    volume_number,
+    storage_zone,
+    volume_size,
+    delete,
+):
+    name = f"{prefix}-{x}"
+    server = create_server(
+        os_cloud,
+        name,
+        os_image,
+        os_flavor,
+        os_network,
+        user_data,
+        compute_zone,
+        interval,
+        timeout,
+        wait,
+    )
 
     volumes = []
-    if CONF.volume:
-        for x in range(CONF.volume_number):
-            volume = create_volume(f"{name}-volume-{x}")
+    if volume:
+        for x in range(volume_number):
+            volume = create_volume(
+                f"{name}-volume-{x}", storage_zone, volume_size, interval, timeout
+            )
             volumes.append(volume)
 
         for volume in volumes:
             logger.info(f"Attaching volume {volume.id} to server {server.id} ({name})")
-            cloud.attach_volume(server, volume)
+            os_cloud.attach_volume(server, volume)
 
             logger.info(f"Refreshing details of {server.id} ({name})")
-            server = cloud.compute.get_server(server.id)
+            server = os_cloud.compute.get_server(server.id)
 
-    if CONF.delete:
-        delete(server, volumes)
+    if delete:
+        delete_server(os_cloud, server, volumes, interval, timeout)
     else:
         logger.info(f"Skipping deletion of server {server.id} ({name})")
         for volume in volumes:
@@ -118,40 +117,51 @@ def create(x, image, flavor, network, user_data):
     return (server, volumes)
 
 
-def create_volume(name):
+def create_volume(os_cloud, name, storage_zone, volume_size, interval, timeout):
     logger.info(f"Creating volume {name}")
 
-    volume = cloud.block_storage.create_volume(
-        availability_zone=CONF.storage_zone, name=name, size=CONF.volume_size
+    volume = os_cloud.block_storage.create_volume(
+        availability_zone=storage_zone, name=name, size=volume_size
     )
 
     logger.info(f"Waiting for volume {volume.id}")
-    cloud.block_storage.wait_for_status(
-        volume, status="available", interval=CONF.interval, wait=CONF.timeout
+    os_cloud.block_storage.wait_for_status(
+        volume, status="available", interval=interval, wait=timeout
     )
 
     return volume
 
 
-def create_server(name, image, flavor, network, user_data):
+def create_server(
+    os_cloud,
+    name,
+    os_image,
+    os_flavor,
+    os_network,
+    user_data,
+    compute_zone,
+    interval,
+    timeout,
+    wait,
+):
     logger.info(f"Creating server {name}")
 
-    server = cloud.compute.create_server(
-        availability_zone=CONF.compute_zone,
+    server = os_cloud.compute.create_server(
+        availability_zone=compute_zone,
         name=name,
-        image_id=image.id,
-        flavor_id=flavor.id,
-        networks=[{"uuid": network.id}],
+        image_id=os_image.id,
+        flavor_id=os_flavor.id,
+        networks=[{"uuid": os_network.id}],
         user_data=user_data,
     )
 
     logger.info(f"Waiting for server {server.id} ({name})")
-    cloud.compute.wait_for_server(server, interval=CONF.interval, wait=CONF.timeout)
+    os_cloud.compute.wait_for_server(server, interval=interval, wait=timeout)
 
-    if CONF.wait:
+    if wait:
         logger.info(f"Waiting for boot / test results of {server.id} ({name})")
         while True:
-            console = cloud.compute.get_server_console_output(server)
+            console = os_cloud.compute.get_server_console_output(server)
             if "Failed to run module scripts-user" in str(console):
                 logger.error(f"Failed tests for {server.id} ({name})")
             if "The system is finally up" in str(console):
@@ -161,66 +171,124 @@ def create_server(name, image, flavor, network, user_data):
     return server
 
 
-def delete(server, volumes):
+def delete_server(os_cloud, server, volumes, interval, timeout):
     logger.info(f"Deleting server {server.id} ({server.name})")
-    cloud.compute.delete_server(server)
+    os_cloud.compute.delete_server(server)
 
     logger.info(f"Waiting for deletion of server {server.id} ({server.name})")
-    cloud.compute.wait_for_delete(server, interval=CONF.interval, wait=CONF.timeout)
+    os_cloud.compute.wait_for_delete(server, interval=interval, wait=timeout)
 
     for volume in volumes:
         logger.info(
             f"Deleting volume {volume.id} from server {server.id} ({server.name})"
         )
-        cloud.block_storage.delete_volume(volume)
+        os_cloud.block_storage.delete_volume(volume)
 
         logger.info(f"Waiting for deletion of volume {volume.id}")
-        cloud.block_storage.wait_for_delete(
-            volume, interval=CONF.interval, wait=CONF.timeout
+        os_cloud.block_storage.wait_for_delete(volume, interval=interval, wait=timeout)
+
+
+def run(
+    cleanup: bool = typer.Option(True, "--cleanup"),
+    debug: bool = typer.Option(False, "--debug"),
+    delete: bool = typer.Option(True, "--delete"),
+    floating: bool = typer.Option(False, "--floating"),
+    volume: bool = typer.Option(False, "--volume"),
+    wait: bool = typer.Option(True, "--wait"),
+    interval: int = typer.Option(10, "--interval"),
+    number: int = typer.Option(1, "--number"),
+    parallel: int = typer.Option(1, "--parallel"),
+    timeout: int = typer.Option(600, "--timeout"),
+    volume_number: int = typer.Option(1, "--volume-number"),
+    volume_size: int = typer.Option(1, "--volume-size"),
+    cloud: str = typer.Option("simple-stress", "--cloud", help="Cloud name"),
+    flavor: str = typer.Option("SCS-1V-1-10", "--flavor"),
+    image: str = typer.Option("Ubuntu 22.04", "--image"),
+    keypair: str = typer.Option(None, "--keypair"),
+    network: str = typer.Option("simple-stress", "--network"),
+    prefix: str = typer.Option("simple-stress", "--prefix"),
+    compute_zone: str = typer.Option(
+        "nova", "--compute-zone", help="Compute availability zone to use"
+    ),
+    network_zone: str = typer.Option(
+        "nova", "--network-zone", help="Network availability zone to use"
+    ),
+    storage_zone: str = typer.Option(
+        "nova", "--storage-zone", help="Storage availability zone to use"
+    ),
+) -> None:
+    openstack.enable_logging(debug=debug, http_debug=debug)
+
+    patch_http_connection_pool(maxsize=parallel)
+    patch_https_connection_pool(maxsize=parallel)
+
+    os_cloud = openstack.connect(cloud=cloud)
+
+    user_data = """
+    #cloud-config
+    final_message: "The system is finally up, after $UPTIME seconds"
+    """
+
+    b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
+
+    logger.info(f"Checking flavor {flavor}")
+    os_flavor = os_cloud.get_flavor(flavor)
+    logger.info(f"flavor.id = {os_flavor.id}")
+
+    logger.info(f"Checking image {image}")
+    os_image = os_cloud.get_image(image)
+    logger.info(f"image.id = {os_image.id}")
+
+    logger.info(f"Checking network {network}")
+    os_network = os_cloud.get_network(network)
+    logger.info(f"network.id = {os_network.id}")
+
+    start = time.time()
+
+    pool = ThreadPoolExecutor(max_workers=parallel)
+    futures_create = []
+    for x in range(number):
+        futures_create.append(
+            pool.submit(
+                create,
+                prefix,
+                x,
+                os_image,
+                os_flavor,
+                os_network,
+                b64_user_data,
+                compute_zone,
+                interval,
+                timeout,
+                wait,
+                volume,
+                volume_number,
+                storage_zone,
+                volume_size,
+                delete,
+            )
         )
 
+    futures_delete = []
+    for server, volumes in [x.result() for x in as_completed(futures_create)]:
+        logger.info(f"Server {server.id} finished")
 
-patch_http_connection_pool(maxsize=CONF.parallel)
-patch_https_connection_pool(maxsize=CONF.parallel)
+        if cleanup and not delete:
+            futures_delete.append(
+                pool.submit(delete_server, os_cloud, server, volumes, interval, timeout)
+            )
 
-cloud = openstack.connect(cloud=CONF.cloud)
+    for x in as_completed(futures_delete):
+        pass
 
-user_data = """
-#cloud-config
-final_message: "The system is finally up, after $UPTIME seconds"
-"""
+    end = time.time()
 
-b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
+    logger.info(f"Runtime: {(end-start):.4f}s")
 
-logger.info(f"Checking flavor {CONF.flavor}")
-flavor = cloud.get_flavor(CONF.flavor)
-logger.info(f"flavor.id = {flavor.id}")
 
-logger.info(f"Checking image {CONF.image}")
-image = cloud.get_image(CONF.image)
-logger.info(f"image.id = {image.id}")
+def main() -> None:
+    typer.run(run)
 
-logger.info(f"Checking network {CONF.network}")
-network = cloud.get_network(CONF.network)
-logger.info(f"network.id = {network.id}")
 
-start = time.time()
-
-pool = ThreadPoolExecutor(max_workers=CONF.parallel)
-futures_create = []
-for x in range(CONF.number):
-    futures_create.append(pool.submit(create, x, image, flavor, network, b64_user_data))
-
-futures_delete = []
-for server, volumes in [x.result() for x in as_completed(futures_create)]:
-    logger.info(f"Server {server.id} finished")
-
-    if CONF.cleanup and not CONF.delete:
-        futures_delete.append(pool.submit(delete, server, volumes))
-
-for x in as_completed(futures_delete):
-    pass
-
-end = time.time()
-
-logger.info(f"Runtime: {(end-start):.4f}s")
+if __name__ == "__main__":
+    main()

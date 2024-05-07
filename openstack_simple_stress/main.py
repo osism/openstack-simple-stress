@@ -8,6 +8,7 @@ import time
 from loguru import logger
 import openstack
 import typer
+from typing_extensions import Annotated
 
 from typing import List
 
@@ -241,35 +242,28 @@ def delete_server(instance: Instance, meta: Meta) -> None:
 
 
 def run(
-    cleanup: bool = typer.Option(True, "--cleanup"),
-    debug: bool = typer.Option(False, "--debug"),
-    delete: bool = typer.Option(True, "--delete"),
-    floating: bool = typer.Option(False, "--floating"),
-    volume: bool = typer.Option(False, "--volume"),
-    wait: bool = typer.Option(True, "--wait"),
-    interval: int = typer.Option(10, "--interval"),
-    number: int = typer.Option(1, "--number"),
-    parallel: int = typer.Option(1, "--parallel"),
-    timeout: int = typer.Option(600, "--timeout"),
-    volume_number: int = typer.Option(1, "--volume-number"),
-    volume_size: int = typer.Option(1, "--volume-size"),
-    cloud_name: str = typer.Option("simple-stress", "--cloud", help="Cloud name"),
-    flavor_name: str = typer.Option("SCS-1V-1-10", "--flavor"),
-    image_name: str = typer.Option("Ubuntu 22.04", "--image"),
-    keypair: str = typer.Option(None, "--keypair"),
-    network_name: str = typer.Option("simple-stress", "--network"),
-    prefix: str = typer.Option("simple-stress", "--prefix"),
-    compute_zone: str = typer.Option(
-        "nova", "--compute-zone", help="Compute availability zone to use"
-    ),
-    network_zone: str = typer.Option(
-        "nova", "--network-zone", help="Network availability zone to use"
-    ),
-    storage_zone: str = typer.Option(
-        "nova", "--storage-zone", help="Storage availability zone to use"
-    ),
+    no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
+    debug: Annotated[bool, typer.Option("--debug")] = False,
+    no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
+    volume: Annotated[bool, typer.Option("--volume")] = False,
+    no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
+    interval: Annotated[int, typer.Option("--interval")] = 10,
+    number: Annotated[int, typer.Option("--number")] = 1,
+    parallel: Annotated[int, typer.Option("--parallel")] = 1,
+    timeout: Annotated[int, typer.Option("--timeout")] = 600,
+    volume_number: Annotated[int, typer.Option("--volume-number")] = 1,
+    volume_size: Annotated[int, typer.Option("--volume-size")] = 1,
+    cloud_name: Annotated[str, typer.Option("--cloud")] = "simple-stress",
+    flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1-10",
+    image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 22.04",
+    network_name: Annotated[str, typer.Option("--network")] = "simple-stress",
+    prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",
+    compute_zone: Annotated[str, typer.Option("--compute-zone")] = "nova",
+    storage_zone: Annotated[str, typer.Option("--storage-zone")] = "nova",
 ) -> None:
-    meta = Meta(wait, interval, timeout, delete)
+    delete = not no_delete
+    cleanup = not no_cleanup
+    meta = Meta(not no_wait, interval, timeout, delete)
 
     openstack.enable_logging(debug=debug, http_debug=debug)
 

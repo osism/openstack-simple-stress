@@ -7,16 +7,25 @@
         - flake8
         - mypy
         - python-black
+        - tox:
+            vars:
+              tox_envlist: test
         - yamllint
     gate:
       jobs:
         - flake8
         - mypy
         - python-black
+        - tox:
+            vars:
+              tox_envlist: test
         - yamllint
     periodic-daily:
       jobs:
         - flake8
         - mypy
         - python-black
+        - tox:
+            vars:
+              tox_envlist: test
         - yamllint

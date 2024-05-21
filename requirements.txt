@@ -26,7 +26,7 @@ platformdirs==4.2.2
 pycparser==2.22
 Pygments==2.18.0
 PyYAML==6.0.1
-requests==2.32.1
+requests==2.32.2
 requestsexceptions==1.4.0
 rfc3986==2.0.0
 rich==13.7.1

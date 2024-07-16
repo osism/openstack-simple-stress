@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "0acb00adfc3f12a3684ba3eccba595474b8dfa8d3d3835f676a98c49aad28c1e"
+            "sha256": "1d82581ce7245e301b278935336001b2a5d00082254da8bf1fba9d2e880d48e9"
         },
         "pipfile-spec": 6,
         "requires": {},
@@ -16,11 +16,11 @@
     "default": {
         "certifi": {
             "hashes": [
-                "sha256:3cd43f1c6fa7dedc5899d69d3ad0398fd018ad1a17fba83ddaf78aa46c747516",
-                "sha256:ddc6c8ce995e6987e7faf5e3f1b02b302836a0e5d98ece18392cb1a36c72ad56"
+                "sha256:5a1e7645bc0ec61a09e26c36f6106dd4cf40c6db3a1fb6352b0244e7fb057c7b",
+                "sha256:c198e21b1289c2ab85ee4e67bb4b4ef3ead0892059901a8d5b622f24a1101e90"
             ],
             "markers": "python_version >= '3.6'",
-            "version": "==2024.6.2"
+            "version": "==2024.7.4"
         },
         "cffi": {
             "hashes": [
@@ -280,11 +280,11 @@
         },
         "keystoneauth1": {
             "hashes": [
-                "sha256:d740843afcf9c159fb929004eee1eecf46573236901e9d8ca2dca5694733a379",
-                "sha256:ecb7f34759ebe103db372ab0953c0b821929ddd497f332aa6b3ef6caacffed88"
+                "sha256:a3623bd03ed9a8cf1866d3eba113423e3cd898f74b79dd95598152b473a2cecc",
+                "sha256:b2cc2d68d1a48e9c2c6d9b1b1fd00d7c7bdfe086e8040b51e70938a8ba3adfd1"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==5.6.0"
+            "version": "==5.7.0"
         },
         "loguru": {
             "hashes": [
@@ -348,12 +348,12 @@
         },
         "openstacksdk": {
             "hashes": [
-                "sha256:3089a716e6edb5e207b3208e63a2335f7d522ea8b8e005da77a0a6591881039f",
-                "sha256:baf507d1508cb3114fe2a3f3afd499dbc972a82d01c2c845f59a8b702ddd08c1"
+                "sha256:0608690ca37ca73327b0fa3761d17e65395be37ff200b8735d8f24277b4f4980",
+                "sha256:e6d4121b87354984caf0e3c032e2ebf4d4440374f86c81c27ec52ca5df359157"
             ],
             "index": "pypi",
             "markers": "python_version >= '3.7'",
-            "version": "==3.2.0"
+            "version": "==3.3.0"
         },
         "os-service-types": {
             "hashes": [

@@ -93,7 +93,13 @@ class Cloud:
 class Instance:
 
     def __init__(
-        self, cloud: Cloud, name: str, user_data: str, compute_zone: str, meta: Meta
+        self,
+        cloud: Cloud,
+        name: str,
+        user_data: str,
+        compute_zone: str,
+        server_group: openstack.compute.v2.server_group.ServerGroup,
+        meta: Meta,
     ):
         self.cloud = cloud
 
@@ -102,6 +108,7 @@ class Instance:
             name,
             user_data,
             compute_zone,
+            server_group,
             meta,
         )
         self.server_name = name
@@ -140,10 +147,11 @@ def create(
     volume_number: int,
     storage_zone: str,
     volume_size: int,
+    server_group: openstack.compute.v2.server_group.ServerGroup,
     meta: Meta,
 ) -> Instance:
 
-    instance = Instance(cloud, name, user_data, compute_zone, meta)
+    instance = Instance(cloud, name, user_data, compute_zone, server_group, meta)
 
     if volume:
         for x in range(volume_number):
@@ -187,6 +195,7 @@ def create_server(
     name: str,
     user_data: str,
     compute_zone: str,
+    server_group: openstack.compute.v2.server_group.ServerGroup,
     meta: Meta,
 ) -> openstack.compute.v2.server.Server:
     logger.info(f"Creating server {name}")
@@ -198,6 +207,7 @@ def create_server(
         flavor_id=cloud.os_flavor.id,
         networks=[{"uuid": cloud.os_network.id}],
         user_data=user_data,
+        scheduler_hints={"group": server_group.id},
     )
 
     logger.info(f"Waiting for server {server.id} ({name})")
@@ -281,6 +291,10 @@ def run(
 
     start = time.time()
 
+    server_group = cloud.os_cloud.compute.create_server_group(
+        name="stress_test_server_group", policies=["soft-anti-affinity"]
+    )
+
     pool = ThreadPoolExecutor(max_workers=parallel)
     futures_create = []
     for x in range(number):
@@ -295,6 +309,7 @@ def run(
                 volume_number,
                 storage_zone,
                 volume_size,
+                server_group,
                 meta,
             )
         )

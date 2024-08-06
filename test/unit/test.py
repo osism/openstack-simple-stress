@@ -47,7 +47,12 @@ class TestInstance(TestBase):
         mock_create_server.return_value = MockServer(7)
 
         instance = Instance(
-            self.mock_cloud, "ServerName", "UserData", "ComputeZone", MOCK_META
+            self.mock_cloud,
+            "ServerName",
+            "UserData",
+            "ComputeZone",
+            MagicMock(),
+            MOCK_META,
         )
 
         self.assertEqual(instance.cloud, self.mock_cloud)
@@ -62,7 +67,12 @@ class TestInstance(TestBase):
         mock_create_volume.return_value = MockVolume(17)
 
         instance = Instance(
-            self.mock_cloud, "ServerName", "UserData", "ComputeZone", MOCK_META
+            self.mock_cloud,
+            "ServerName",
+            "UserData",
+            "ComputeZone",
+            MagicMock(),
+            MOCK_META,
         )
 
         self.assertEqual(len(instance.volumes), 0)
@@ -90,7 +100,12 @@ class TestInstance(TestBase):
         self.mock_cloud.os_cloud.compute.get_server.return_value = MockServer(8)
 
         instance = Instance(
-            self.mock_cloud, "ServerName", "UserData", "ComputeZone", MOCK_META
+            self.mock_cloud,
+            "ServerName",
+            "UserData",
+            "ComputeZone",
+            MagicMock(),
+            MOCK_META,
         )
         instance.add_volume("VolumeName", "StorageZone", 42, MOCK_META)
         instance.add_volume("VolumeName2", "StorageZone2", 23, MOCK_META)
@@ -122,6 +137,7 @@ class TestCreate(TestBase):
             5,
             "StorageZone",
             50,
+            MagicMock(),
             MOCK_META,
         )
 
@@ -146,6 +162,7 @@ class TestCreate(TestBase):
             5,
             "StorageZone",
             50,
+            MagicMock(),
             MOCK_META_2,
         )
 
@@ -179,9 +196,16 @@ class TestCreate(TestBase):
         self.mock_cloud.os_cloud.compute.get_server_console_output.return_value = (
             "The system is finally up"
         )
+        mock_server_group = MagicMock()
+        mock_server_group.id = 1234
 
         server = create_server(
-            self.mock_cloud, "ServerName", "UserData", "ComputeZone", MOCK_META
+            self.mock_cloud,
+            "ServerName",
+            "UserData",
+            "ComputeZone",
+            mock_server_group,
+            MOCK_META,
         )
 
         self.assertEqual(server.id, 7)
@@ -192,6 +216,7 @@ class TestCreate(TestBase):
             flavor_id=self.mock_cloud.os_flavor.id,
             networks=[{"uuid": self.mock_cloud.os_network.id}],
             user_data="UserData",
+            scheduler_hints={"group": 1234},
         )
         self.mock_cloud.os_cloud.compute.wait_for_server.assert_called_with(
             server,
@@ -201,9 +226,16 @@ class TestCreate(TestBase):
 
     def test_create_server_1(self):
         self.mock_cloud.os_cloud.compute.create_server.return_value = MockServer(7)
+        mock_server_group = MagicMock()
+        mock_server_group.id = 1234
 
         server = create_server(
-            self.mock_cloud, "ServerName", "UserData", "ComputeZone", MOCK_META_2
+            self.mock_cloud,
+            "ServerName",
+            "UserData",
+            "ComputeZone",
+            mock_server_group,
+            MOCK_META_2,
         )
 
         self.assertEqual(server.id, 7)
@@ -214,6 +246,7 @@ class TestCreate(TestBase):
             flavor_id=self.mock_cloud.os_flavor.id,
             networks=[{"uuid": self.mock_cloud.os_network.id}],
             user_data="UserData",
+            scheduler_hints={"group": 1234},
         )
         self.mock_cloud.os_cloud.compute.wait_for_server.assert_called_with(
             server,
@@ -239,6 +272,7 @@ class TestDelete(TestBase):
             5,
             "StorageZone",
             50,
+            MagicMock(),
             MOCK_META,
         )
 

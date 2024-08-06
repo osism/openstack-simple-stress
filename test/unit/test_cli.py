@@ -114,6 +114,7 @@ class TestCLI(unittest.TestCase):
             flavor_id=ANY,
             networks=ANY,
             user_data=ANY,
+            scheduler_hints=ANY,
         )
 
 

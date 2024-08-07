@@ -10,6 +10,7 @@ import openstack
 import typer
 from typing_extensions import Annotated
 
+from enum import Enum
 from typing import List
 
 log_fmt = (
@@ -251,6 +252,13 @@ def delete_server(instance: Instance, meta: Meta) -> None:
         )
 
 
+class AffinitySetting(str, Enum):
+    soft = "soft-affinity"
+    soft_anti = "soft-anti-affinity"
+    hard = "affinity"
+    hard_anti = "anti-affinity"
+
+
 def run(
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
@@ -270,6 +278,9 @@ def run(
     prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",
     compute_zone: Annotated[str, typer.Option("--compute-zone")] = "nova",
     storage_zone: Annotated[str, typer.Option("--storage-zone")] = "nova",
+    affinity: Annotated[
+        AffinitySetting, typer.Option("--affinity")
+    ] = AffinitySetting.soft_anti,
 ) -> None:
     delete = not no_delete
     cleanup = not no_cleanup
@@ -292,7 +303,7 @@ def run(
     start = time.time()
 
     server_group = cloud.os_cloud.compute.create_server_group(
-        name="stress_test_server_group", policies=["soft-anti-affinity"]
+        name="stress_test_server_group", policies=[affinity.value]
     )
 
     pool = ThreadPoolExecutor(max_workers=parallel)

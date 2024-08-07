@@ -117,6 +117,22 @@ class TestCLI(unittest.TestCase):
             scheduler_hints=ANY,
         )
 
+    def test_cli_10(self):
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.create_server_group.assert_called_with(
+            name="stress_test_server_group",
+            policies=["soft-anti-affinity"],
+        )
+
+    def test_cli_11(self):
+        result = self.runner.invoke(app, ["--affinity=anti-affinity"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.create_server_group.assert_called_with(
+            name="stress_test_server_group",
+            policies=["anti-affinity"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

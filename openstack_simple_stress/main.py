@@ -117,13 +117,19 @@ class Instance:
         self.volumes: List[openstack.block_storage.v2.volume.Volume] = []
 
     def add_volume(
-        self, name: str, storage_zone: str, volume_size: int, meta: Meta
+        self,
+        name: str,
+        storage_zone: str,
+        volume_size: int,
+        volume_type: str,
+        meta: Meta,
     ) -> None:
         volume = create_volume(
             self.cloud,
             name,
             storage_zone,
             volume_size,
+            volume_type,
             meta,
         )
         self.volumes.append(volume)
@@ -149,6 +155,7 @@ def create(
     storage_zone: str,
     volume_size: int,
     server_group: openstack.compute.v2.server_group.ServerGroup,
+    volume_type: str,
     meta: Meta,
 ) -> Instance:
 
@@ -156,7 +163,9 @@ def create(
 
     if volume:
         for x in range(volume_number):
-            instance.add_volume(f"{name}-volume-{x}", storage_zone, volume_size, meta)
+            instance.add_volume(
+                f"{name}-volume-{x}", storage_zone, volume_size, volume_type, meta
+            )
 
     instance.attach_volumes()
 
@@ -175,12 +184,20 @@ def create(
 
 
 def create_volume(
-    cloud: Cloud, name: str, storage_zone: str, volume_size: int, meta: Meta
+    cloud: Cloud,
+    name: str,
+    storage_zone: str,
+    volume_size: int,
+    volume_type: str,
+    meta: Meta,
 ) -> openstack.block_storage.v2.volume.Volume:
     logger.info(f"Creating volume {name}")
 
     volume = cloud.os_cloud.block_storage.create_volume(
-        availability_zone=storage_zone, name=name, size=volume_size
+        availability_zone=storage_zone,
+        name=name,
+        size=volume_size,
+        volume_type=volume_type,
     )
 
     logger.info(f"Waiting for volume {volume.id}")
@@ -281,6 +298,7 @@ def run(
     affinity: Annotated[
         AffinitySetting, typer.Option("--affinity")
     ] = AffinitySetting.soft_anti,
+    volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
 ) -> None:
     delete = not no_delete
     cleanup = not no_cleanup
@@ -321,6 +339,7 @@ def run(
                 storage_zone,
                 volume_size,
                 server_group,
+                volume_type,
                 meta,
             )
         )

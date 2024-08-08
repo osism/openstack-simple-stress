@@ -77,18 +77,18 @@ class TestInstance(TestBase):
 
         self.assertEqual(len(instance.volumes), 0)
 
-        instance.add_volume("VolumeName", "StorageZone", 42, MOCK_META)
+        instance.add_volume("VolumeName", "StorageZone", 42, "VolumeType", MOCK_META)
 
         mock_create_volume.assert_called_with(
-            self.mock_cloud, "VolumeName", "StorageZone", 42, MOCK_META
+            self.mock_cloud, "VolumeName", "StorageZone", 42, "VolumeType", MOCK_META
         )
         self.assertEqual(len(instance.volumes), 1)
         self.assertEqual(instance.volumes[0].id, 17)
 
-        instance.add_volume("VolumeName2", "StorageZone2", 23, MOCK_META)
+        instance.add_volume("VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META)
 
         mock_create_volume.assert_called_with(
-            self.mock_cloud, "VolumeName2", "StorageZone2", 23, MOCK_META
+            self.mock_cloud, "VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META
         )
         self.assertEqual(len(instance.volumes), 2)
 
@@ -107,8 +107,8 @@ class TestInstance(TestBase):
             MagicMock(),
             MOCK_META,
         )
-        instance.add_volume("VolumeName", "StorageZone", 42, MOCK_META)
-        instance.add_volume("VolumeName2", "StorageZone2", 23, MOCK_META)
+        instance.add_volume("VolumeName", "StorageZone", 42, "VolumeType", MOCK_META)
+        instance.add_volume("VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META)
 
         instance.attach_volumes()
 
@@ -138,6 +138,7 @@ class TestCreate(TestBase):
             "StorageZone",
             50,
             MagicMock(),
+            "VolumeType",
             MOCK_META,
         )
 
@@ -163,6 +164,7 @@ class TestCreate(TestBase):
             "StorageZone",
             50,
             MagicMock(),
+            "VolumeType",
             MOCK_META_2,
         )
 
@@ -177,12 +179,15 @@ class TestCreate(TestBase):
         )
 
         volume = create_volume(
-            self.mock_cloud, "VolumeName", "StorageZone", 22, MOCK_META
+            self.mock_cloud, "VolumeName", "StorageZone", 22, "VolumeType", MOCK_META
         )
 
         self.assertEqual(volume.id, 17)
         self.mock_cloud.os_cloud.block_storage.create_volume.assert_called_with(
-            availability_zone="StorageZone", name="VolumeName", size=22
+            availability_zone="StorageZone",
+            name="VolumeName",
+            size=22,
+            volume_type="VolumeType",
         )
         self.mock_cloud.os_cloud.block_storage.wait_for_status.assert_called_with(
             volume,
@@ -273,6 +278,7 @@ class TestDelete(TestBase):
             "StorageZone",
             50,
             MagicMock(),
+            "VolumeType",
             MOCK_META,
         )
 

@@ -78,6 +78,7 @@ class TestCLI(unittest.TestCase):
                 "--volume",
                 "--volume-number=5",
                 "--volume-size=999",
+                "--volume-type=NotDefault",
                 "--prefix=unittest",
                 "--storage-zone=StorageZone",
             ],
@@ -85,7 +86,7 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.assertEqual(mock_add_volume.call_count, 5)
         mock_add_volume.assert_called_with(
-            "unittest-0-volume-4", "StorageZone", 999, ANY
+            "unittest-0-volume-4", "StorageZone", 999, "NotDefault", ANY
         )
 
     def test_cli_8(self):

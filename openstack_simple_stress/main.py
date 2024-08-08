@@ -234,7 +234,7 @@ def create_server(
     )
 
     if meta.wait:
-        logger.info(f"Waiting for boot / test results of {server.id} ({name})")
+        logger.info(f"Waiting for boot of {server.id} ({name})")
         while True:
             console = cloud.os_cloud.compute.get_server_console_output(server)
             if "Failed to run module scripts-user" in str(console):

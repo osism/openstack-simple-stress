@@ -119,19 +119,31 @@ class TestCLI(unittest.TestCase):
         )
 
     def test_cli_10(self):
+        mock_server_group = MagicMock()
+        self.mock_os_cloud.compute.create_server_group.return_value = mock_server_group
+
         result = self.runner.invoke(app, [])
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_os_cloud.compute.create_server_group.assert_called_with(
-            name="stress_test_server_group",
+            name="simple-stress",
             policies=["soft-anti-affinity"],
+        )
+        self.mock_os_cloud.compute.delete_server_group.assert_called_with(
+            mock_server_group
         )
 
     def test_cli_11(self):
+        mock_server_group = MagicMock()
+        self.mock_os_cloud.compute.create_server_group.return_value = mock_server_group
+
         result = self.runner.invoke(app, ["--affinity=anti-affinity"])
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_os_cloud.compute.create_server_group.assert_called_with(
-            name="stress_test_server_group",
+            name="simple-stress",
             policies=["anti-affinity"],
+        )
+        self.mock_os_cloud.compute.delete_server_group.assert_called_with(
+            mock_server_group
         )
 
 

@@ -320,8 +320,9 @@ def run(
 
     start = time.time()
 
+    logger.info(f"Creating server group {prefix}")
     server_group = cloud.os_cloud.compute.create_server_group(
-        name="stress_test_server_group", policies=[affinity.value]
+        name=prefix, policies=[affinity.value]
     )
 
     pool = ThreadPoolExecutor(max_workers=parallel)
@@ -353,6 +354,9 @@ def run(
 
     for f in as_completed(futures_delete):
         pass
+
+    logger.info(f"Deleting server group {prefix}")
+    cloud.os_cloud.compute.delete_server_group(server_group)
 
     end = time.time()
 

@@ -32,12 +32,11 @@ class TestBase(unittest.TestCase):
         mock_os_cloud = MagicMock()
         mock_connect.return_value = mock_os_cloud
 
-        self.mock_cloud = Cloud("CloudName", "FlavorName", "ImageName", "NetworkName")
+        self.mock_cloud = Cloud("CloudName", "FlavorName", "ImageName")
 
         mock_connect.assert_called_with(cloud="CloudName")
         mock_os_cloud.get_flavor.assert_called_with("FlavorName")
         mock_os_cloud.get_image.assert_called_with("ImageName")
-        mock_os_cloud.get_network.assert_called_with("NetworkName")
 
 
 class TestInstance(TestBase):
@@ -51,6 +50,7 @@ class TestInstance(TestBase):
             "ServerName",
             "UserData",
             "ComputeZone",
+            MagicMock(),
             MagicMock(),
             MOCK_META,
         )
@@ -71,6 +71,7 @@ class TestInstance(TestBase):
             "ServerName",
             "UserData",
             "ComputeZone",
+            MagicMock(),
             MagicMock(),
             MOCK_META,
         )
@@ -104,6 +105,7 @@ class TestInstance(TestBase):
             "ServerName",
             "UserData",
             "ComputeZone",
+            MagicMock(),
             MagicMock(),
             MOCK_META,
         )
@@ -139,6 +141,7 @@ class TestCreate(TestBase):
             50,
             MagicMock(),
             "VolumeType",
+            MagicMock(),
             MOCK_META,
         )
 
@@ -165,6 +168,7 @@ class TestCreate(TestBase):
             50,
             MagicMock(),
             "VolumeType",
+            MagicMock(),
             MOCK_META_2,
         )
 
@@ -203,6 +207,8 @@ class TestCreate(TestBase):
         )
         mock_server_group = MagicMock()
         mock_server_group.id = 1234
+        mock_network = MagicMock()
+        mock_network.id = 5678
 
         server = create_server(
             self.mock_cloud,
@@ -210,6 +216,7 @@ class TestCreate(TestBase):
             "UserData",
             "ComputeZone",
             mock_server_group,
+            mock_network,
             MOCK_META,
         )
 
@@ -219,7 +226,7 @@ class TestCreate(TestBase):
             name="ServerName",
             image_id=self.mock_cloud.os_image.id,
             flavor_id=self.mock_cloud.os_flavor.id,
-            networks=[{"uuid": self.mock_cloud.os_network.id}],
+            networks=[{"uuid": 5678}],
             user_data="UserData",
             scheduler_hints={"group": 1234},
         )
@@ -233,6 +240,8 @@ class TestCreate(TestBase):
         self.mock_cloud.os_cloud.compute.create_server.return_value = MockServer(7)
         mock_server_group = MagicMock()
         mock_server_group.id = 1234
+        mock_network = MagicMock()
+        mock_network.id = 5678
 
         server = create_server(
             self.mock_cloud,
@@ -240,6 +249,7 @@ class TestCreate(TestBase):
             "UserData",
             "ComputeZone",
             mock_server_group,
+            mock_network,
             MOCK_META_2,
         )
 
@@ -249,7 +259,7 @@ class TestCreate(TestBase):
             name="ServerName",
             image_id=self.mock_cloud.os_image.id,
             flavor_id=self.mock_cloud.os_flavor.id,
-            networks=[{"uuid": self.mock_cloud.os_network.id}],
+            networks=[{"uuid": 5678}],
             user_data="UserData",
             scheduler_hints={"group": 1234},
         )
@@ -279,6 +289,7 @@ class TestDelete(TestBase):
             50,
             MagicMock(),
             "VolumeType",
+            MagicMock(),
             MOCK_META,
         )
 

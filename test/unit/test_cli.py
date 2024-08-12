@@ -96,14 +96,12 @@ class TestCLI(unittest.TestCase):
                 "--cloud=test",
                 "--flavor=testflavor",
                 "--image=testimage",
-                "--network=testnetwork",
             ],
         )
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_connect.assert_called_with(cloud="test")
         self.mock_os_cloud.get_flavor.assert_called_with("testflavor")
         self.mock_os_cloud.get_image.assert_called_with("testimage")
-        self.mock_os_cloud.get_network.assert_called_with("testnetwork")
 
     def test_cli_9(self):
         result = self.runner.invoke(app, ["--compute-zone=ComputeZone"])
@@ -144,6 +142,44 @@ class TestCLI(unittest.TestCase):
         )
         self.mock_os_cloud.compute.delete_server_group.assert_called_with(
             mock_server_group
+        )
+
+    def test_cli_12(self):
+        mock_network = MagicMock()
+        self.mock_os_cloud.network.create_network.return_value = mock_network
+        mock_network.id = 1234
+
+        mock_subnet = MagicMock()
+        self.mock_os_cloud.network.create_subnet.return_value = mock_subnet
+
+        result = self.runner.invoke(app, ["--subnet-cidr=10.100.1.0/24"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.network.create_network.assert_called_once_with(
+            name="simple-stress",
+        )
+        self.mock_os_cloud.network.create_subnet.assert_called_once_with(
+            name="simple-stress-subnet",
+            network_id=1234,
+            ip_version="4",
+            cidr="10.100.1.0/24",
+        )
+        self.mock_os_cloud.network.delete_subnet.assert_called_with(
+            mock_subnet, ignore_missing=False
+        )
+        self.mock_os_cloud.network.delete_network.assert_called_with(
+            mock_network, ignore_missing=False
+        )
+
+    def test_cli_13(self):
+        # Test fallback for invalid cidr input
+        result = self.runner.invoke(app, ["--subnet-cidr=10.100.255.255/24"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+
+        self.mock_os_cloud.network.create_subnet.assert_called_once_with(
+            name=ANY,
+            network_id=ANY,
+            ip_version=ANY,
+            cidr="10.100.0.0/16",
         )
 
 

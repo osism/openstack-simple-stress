@@ -48,15 +48,3 @@
       ansible.builtin.command: openstack --os-cloud openstack image create "cirros" --file ./devstack/files/{{ find_image.files[0].path | basename }} --disk-format qcow2 --container-format bare --public
       args:
         chdir: "{{ zuul_work_dir }}"
-
-    - name: Create expected network
-      # yamllint disable-line rule:line-length
-      ansible.builtin.command: "openstack --os-cloud openstack network create simple-stress"
-      args:
-        chdir: "{{ zuul_work_dir }}"
-
-    - name: Create expected subnet
-      # yamllint disable-line rule:line-length
-      ansible.builtin.command: "openstack --os-cloud openstack subnet create simple-stress-subnet --network simple-stress --subnet-range 10.100.1.0/24"
-      args:
-        chdir: "{{ zuul_work_dir }}"

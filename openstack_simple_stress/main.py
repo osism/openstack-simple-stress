@@ -6,6 +6,7 @@ import sys
 import time
 
 from loguru import logger
+import ipaddress
 import openstack
 import typer
 from typing_extensions import Annotated
@@ -73,9 +74,7 @@ class Meta:
 
 class Cloud:
 
-    def __init__(
-        self, cloud_name: str, flavor_name: str, image_name: str, network_name: str
-    ):
+    def __init__(self, cloud_name: str, flavor_name: str, image_name: str):
         self.os_cloud = openstack.connect(cloud=cloud_name)
 
         logger.info(f"Checking flavor {flavor_name}")
@@ -85,10 +84,6 @@ class Cloud:
         logger.info(f"Checking image {image_name}")
         self.os_image = self.os_cloud.get_image(image_name)
         logger.info(f"image.id = {self.os_image.id}")
-
-        logger.info(f"Checking network {network_name}")
-        self.os_network = self.os_cloud.get_network(network_name)
-        logger.info(f"network.id = {self.os_network.id}")
 
 
 class Instance:
@@ -100,6 +95,7 @@ class Instance:
         user_data: str,
         compute_zone: str,
         server_group: openstack.compute.v2.server_group.ServerGroup,
+        network: openstack.network.v2.network.Network,
         meta: Meta,
     ):
         self.cloud = cloud
@@ -110,6 +106,7 @@ class Instance:
             user_data,
             compute_zone,
             server_group,
+            network,
             meta,
         )
         self.server_name = name
@@ -156,10 +153,13 @@ def create(
     volume_size: int,
     server_group: openstack.compute.v2.server_group.ServerGroup,
     volume_type: str,
+    network: openstack.network.v2.network.Network,
     meta: Meta,
 ) -> Instance:
 
-    instance = Instance(cloud, name, user_data, compute_zone, server_group, meta)
+    instance = Instance(
+        cloud, name, user_data, compute_zone, server_group, network, meta
+    )
 
     if volume:
         for x in range(volume_number):
@@ -214,6 +214,7 @@ def create_server(
     user_data: str,
     compute_zone: str,
     server_group: openstack.compute.v2.server_group.ServerGroup,
+    network: openstack.network.v2.network.Network,
     meta: Meta,
 ) -> openstack.compute.v2.server.Server:
     logger.info(f"Creating server {name}")
@@ -223,7 +224,7 @@ def create_server(
         name=name,
         image_id=cloud.os_image.id,
         flavor_id=cloud.os_flavor.id,
-        networks=[{"uuid": cloud.os_network.id}],
+        networks=[{"uuid": network.id}],
         user_data=user_data,
         scheduler_hints={"group": server_group.id},
     )
@@ -291,7 +292,7 @@ def run(
     cloud_name: Annotated[str, typer.Option("--cloud")] = "simple-stress",
     flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1-10",
     image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 22.04",
-    network_name: Annotated[str, typer.Option("--network")] = "simple-stress",
+    subnet_cidr: Annotated[str, typer.Option("--subnet-cidr")] = "10.100.0.0/16",
     prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",
     compute_zone: Annotated[str, typer.Option("--compute-zone")] = "nova",
     storage_zone: Annotated[str, typer.Option("--storage-zone")] = "nova",
@@ -309,8 +310,6 @@ def run(
     patch_http_connection_pool(maxsize=parallel)
     patch_https_connection_pool(maxsize=parallel)
 
-    cloud = Cloud(cloud_name, flavor_name, image_name, network_name)
-
     user_data = """
     #cloud-config
     final_message: "The system is finally up, after $UPTIME seconds"
@@ -319,6 +318,25 @@ def run(
     b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
 
     start = time.time()
+
+    cloud = Cloud(cloud_name, flavor_name, image_name)
+
+    logger.info(f"Creating network {prefix}")
+    network = cloud.os_cloud.network.create_network(name=prefix)
+
+    logger.info(f"Creating subnet {prefix}-subnet")
+    try:
+        ipaddress.ip_network(subnet_cidr)
+    except ValueError:
+        logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
+        subnet_cidr = "10.100.0.0/16"
+
+    subnet = cloud.os_cloud.network.create_subnet(
+        name=f"{prefix}-subnet",
+        network_id=network.id,
+        ip_version="4",
+        cidr=subnet_cidr,
+    )
 
     logger.info(f"Creating server group {prefix}")
     server_group = cloud.os_cloud.compute.create_server_group(
@@ -341,6 +359,7 @@ def run(
                 volume_size,
                 server_group,
                 volume_type,
+                network,
                 meta,
             )
         )
@@ -357,6 +376,12 @@ def run(
 
     logger.info(f"Deleting server group {prefix}")
     cloud.os_cloud.compute.delete_server_group(server_group)
+
+    logger.info(f"Deleting subnet {prefix}-subnet")
+    cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+
+    logger.info(f"Deleting network {prefix}")
+    cloud.os_cloud.network.delete_network(network, ignore_missing=False)
 
     end = time.time()
 

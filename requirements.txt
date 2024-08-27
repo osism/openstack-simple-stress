@@ -21,7 +21,7 @@ openstacksdk==3.3.0
 os-service-types==1.7.0
 oslo.config==9.5.0
 oslo.i18n==6.4.0
-pbr==6.0.0
+pbr==6.1.0
 platformdirs==4.2.2
 pycparser==2.22
 Pygments==2.18.0

@@ -6,5 +6,5 @@ name = "pypi"
 [packages]
 PyYAML = "==6.0.2"
 loguru = "==0.7.2"
-openstacksdk = "==3.3.0"
+openstacksdk = "==4.0.0"
 typer = "==0.12.5"

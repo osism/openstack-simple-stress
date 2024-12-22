@@ -34,5 +34,5 @@ shellingham==1.5.4
 stevedore==5.4.0
 typer==0.15.1
 typing_extensions==4.12.2
-urllib3==2.2.3
+urllib3==2.3.0
 wrapt==1.17.0

@@ -24,7 +24,7 @@ oslo.i18n==6.5.0
 pbr==6.1.0
 platformdirs==4.3.6
 pycparser==2.22
-Pygments==2.18.0
+Pygments==2.19.0
 PyYAML==6.0.2
 requests==2.32.3
 requestsexceptions==1.4.0

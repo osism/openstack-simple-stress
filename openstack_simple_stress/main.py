@@ -2,17 +2,16 @@
 
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
+import ipaddress
 import sys
 import time
+from typing import List
 
 from loguru import logger
-import ipaddress
 import openstack
 import typer
 from typing_extensions import Annotated
-
-from enum import Enum
-from typing import List
 
 log_fmt = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "

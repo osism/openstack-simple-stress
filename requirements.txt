@@ -31,7 +31,7 @@ rfc3986==2.0.0
 rich==14.0.0
 shellingham==1.5.4
 stevedore==5.4.1
-typer==0.15.2
+typer==0.15.3
 typing_extensions==4.13.2
 urllib3==2.4.0
 wrapt==1.17.2

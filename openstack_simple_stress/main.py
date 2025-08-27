@@ -4,6 +4,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 import ipaddress
+import signal
 import sys
 import time
 from typing import List
@@ -20,6 +21,26 @@ log_fmt = (
 
 logger.remove()
 logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
+
+shutdown_requested = False
+
+
+def signal_handler(signum, frame):
+    global shutdown_requested
+
+    logger.warning("\nCTRL+C received - Do you want to abort the test?")
+    try:
+        response = input("Abort? (y/N): ").strip().lower()
+        if response in ["y", "yes"]:
+            shutdown_requested = True
+            logger.info(
+                "Graceful shutdown initiated - current iteration will be aborted and cleanup performed..."
+            )
+        else:
+            logger.info("Continuing with test...")
+    except (EOFError, KeyboardInterrupt):
+        shutdown_requested = True
+        logger.info("Graceful shutdown initiated...")
 
 
 # source: https://stackoverflow.com/questions/18466079/can-i-change-the-connection-pool-size-for-pythons-requests-module  # noqa
@@ -344,6 +365,8 @@ def run(
     volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
     boot_volume_size: Annotated[int, typer.Option("--boot-volume-size")] = 20,
 ) -> None:
+    # Register signal handler for CTRL+C
+    signal.signal(signal.SIGINT, signal_handler)
     delete = not no_delete
     cleanup = not no_cleanup
     meta = Meta(not no_wait, interval, timeout, delete)
@@ -409,27 +432,85 @@ def run(
         )
 
     futures_delete = []
-    for instance in [x.result() for x in as_completed(futures_create)]:
-        logger.info(f"Server {instance.server.id} finished")
+    completed_instances = []
 
+    # Process completed futures, check for shutdown requests
+    for future in as_completed(futures_create):
+        if shutdown_requested:
+            logger.warning("Shutdown requested - aborting current iteration...")
+            break
+
+        try:
+            instance = future.result()
+            completed_instances.append(instance)
+            logger.info(f"Server {instance.server.id} finished")
+        except Exception as e:
+            logger.error(f"Error creating server: {e}")
+
+    # Cancel remaining futures if shutdown was requested
+    if shutdown_requested:
+        logger.info("Stopping remaining operations...")
+        for future in futures_create:
+            if not future.done():
+                future.cancel()
+
+    # Always perform cleanup, even if shutdown was requested
+    logger.info("Performing cleanup...")
+    for instance in completed_instances:
         if cleanup and not delete:
             futures_delete.append(pool.submit(delete_server, instance, meta))
 
+    # Wait for deletion to complete
     for f in as_completed(futures_delete):
-        pass
+        try:
+            f.result()
+        except Exception as e:
+            logger.error(f"Error deleting resources: {e}")
 
-    logger.info(f"Deleting server group {prefix}")
-    cloud.os_cloud.compute.delete_server_group(server_group)
+    # Ensure all volumes are cleaned up, especially if shutdown was requested
+    if shutdown_requested or (cleanup and not delete):
+        logger.info("Ensuring all volumes are deleted...")
+        for instance in completed_instances:
+            for vol in instance.volumes:
+                try:
+                    logger.info(f"Checking and deleting volume {vol.id}")
+                    existing_volume = cloud.os_cloud.block_storage.get_volume(vol.id)
+                    if existing_volume:
+                        cloud.os_cloud.block_storage.delete_volume(vol)
+                        logger.info(f"Waiting for deletion of volume {vol.id}")
+                        cloud.os_cloud.block_storage.wait_for_delete(
+                            vol, interval=meta.interval, wait=meta.timeout
+                        )
+                except Exception as e:
+                    logger.error(f"Error deleting volume {vol.id}: {e}")
 
-    logger.info(f"Deleting subnet {prefix}-subnet")
-    cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+    # Always clean up infrastructure resources
+    try:
+        logger.info(f"Deleting server group {prefix}")
+        cloud.os_cloud.compute.delete_server_group(server_group)
+    except Exception as e:
+        logger.error(f"Error deleting server group: {e}")
 
-    logger.info(f"Deleting network {prefix}")
-    cloud.os_cloud.network.delete_network(network, ignore_missing=False)
+    try:
+        logger.info(f"Deleting subnet {prefix}-subnet")
+        cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+    except Exception as e:
+        logger.error(f"Error deleting subnet: {e}")
+
+    try:
+        logger.info(f"Deleting network {prefix}")
+        cloud.os_cloud.network.delete_network(network, ignore_missing=False)
+    except Exception as e:
+        logger.error(f"Error deleting network: {e}")
 
     end = time.time()
 
-    logger.info(f"Runtime: {(end-start):.4f}s")
+    if shutdown_requested:
+        logger.info(
+            f"Test was aborted - cleanup completed. Runtime: {(end-start):.4f}s"
+        )
+    else:
+        logger.info(f"Test completed successfully. Runtime: {(end-start):.4f}s")
 
 
 def main() -> None:

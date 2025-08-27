@@ -33,7 +33,7 @@ used for real tests and regular checks.
   │ --volume-size          INTEGER                                           [default: 1]                                      │
   │ --cloud                TEXT                                              [default: simple-stress]                          │
   │ --flavor               TEXT                                              [default: SCS-1V-1-10]                            │
-  │ --image                TEXT                                              [default: Ubuntu 22.04]                           │
+  │ --image                TEXT                                              [default: Ubuntu 24.04]                           │
   │ --subnet-cidr          TEXT                                              [default: 10.100.0.0/16]                          │
   │ --prefix               TEXT                                              [default: simple-stress]                          │
   │ --compute-zone         TEXT                                              [default: nova]                                   │

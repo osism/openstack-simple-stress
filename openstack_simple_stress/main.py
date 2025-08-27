@@ -290,7 +290,7 @@ def run(
     volume_size: Annotated[int, typer.Option("--volume-size")] = 1,
     cloud_name: Annotated[str, typer.Option("--cloud")] = "simple-stress",
     flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1-10",
-    image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 22.04",
+    image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 24.04",
     subnet_cidr: Annotated[str, typer.Option("--subnet-cidr")] = "10.100.0.0/16",
     prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",
     compute_zone: Annotated[str, typer.Option("--compute-zone")] = "nova",

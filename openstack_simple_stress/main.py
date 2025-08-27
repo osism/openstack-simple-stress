@@ -96,6 +96,9 @@ class Instance:
         server_group: openstack.compute.v2.server_group.ServerGroup,
         network: openstack.network.v2.network.Network,
         meta: Meta,
+        boot_volume_size: int = 20,
+        storage_zone: str = "nova",
+        volume_type: str = "__DEFAULT__",
     ):
         self.cloud = cloud
 
@@ -107,6 +110,9 @@ class Instance:
             server_group,
             network,
             meta,
+            boot_volume_size,
+            storage_zone,
+            volume_type,
         )
         self.server_name = name
 
@@ -154,10 +160,20 @@ def create(
     volume_type: str,
     network: openstack.network.v2.network.Network,
     meta: Meta,
+    boot_volume_size: int = 20,
 ) -> Instance:
 
     instance = Instance(
-        cloud, name, user_data, compute_zone, server_group, network, meta
+        cloud,
+        name,
+        user_data,
+        compute_zone,
+        server_group,
+        network,
+        meta,
+        boot_volume_size,
+        storage_zone,
+        volume_type,
     )
 
     if volume:
@@ -215,17 +231,38 @@ def create_server(
     server_group: openstack.compute.v2.server_group.ServerGroup,
     network: openstack.network.v2.network.Network,
     meta: Meta,
+    boot_volume_size: int = 20,
+    storage_zone: str = "nova",
+    volume_type: str = "__DEFAULT__",
 ) -> openstack.compute.v2.server.Server:
-    logger.info(f"Creating server {name}")
+    logger.info(
+        f"Creating server {name} with boot from volume (size: {boot_volume_size}GB)"
+    )
+
+    # Create block device mapping for boot from volume
+    block_device_mapping = [
+        {
+            "uuid": cloud.os_image.id,
+            "source_type": "image",
+            "destination_type": "volume",
+            "boot_index": 0,
+            "volume_size": boot_volume_size,
+            "delete_on_termination": True,
+        }
+    ]
+
+    # Add volume_type if not default
+    if volume_type != "__DEFAULT__":
+        block_device_mapping[0]["volume_type"] = volume_type
 
     server = cloud.os_cloud.compute.create_server(
         availability_zone=compute_zone,
         name=name,
-        image_id=cloud.os_image.id,
         flavor_id=cloud.os_flavor.id,
         networks=[{"uuid": network.id}],
         user_data=user_data,
         scheduler_hints={"group": server_group.id},
+        block_device_mapping=block_device_mapping,
     )
 
     logger.info(f"Waiting for server {server.id} ({name})")
@@ -280,7 +317,7 @@ def run(
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
     no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
-    volume: Annotated[bool, typer.Option("--volume")] = False,
+    volume: Annotated[bool, typer.Option("--volume")] = True,
     no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
     interval: Annotated[int, typer.Option("--interval")] = 10,
     number: Annotated[int, typer.Option("--number")] = 1,
@@ -289,7 +326,7 @@ def run(
     volume_number: Annotated[int, typer.Option("--volume-number")] = 1,
     volume_size: Annotated[int, typer.Option("--volume-size")] = 1,
     cloud_name: Annotated[str, typer.Option("--cloud")] = "simple-stress",
-    flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1-10",
+    flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1",
     image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 24.04",
     subnet_cidr: Annotated[str, typer.Option("--subnet-cidr")] = "10.100.0.0/16",
     prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",
@@ -299,6 +336,7 @@ def run(
         AffinitySetting, typer.Option("--affinity")
     ] = AffinitySetting.soft_anti,
     volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
+    boot_volume_size: Annotated[int, typer.Option("--boot-volume-size")] = 20,
 ) -> None:
     delete = not no_delete
     cleanup = not no_cleanup
@@ -360,6 +398,7 @@ def run(
                 volume_type,
                 network,
                 meta,
+                boot_volume_size,
             )
         )
 

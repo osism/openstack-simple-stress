@@ -1,6 +1,6 @@
 certifi==2025.4.26
 cffi==1.17.1
-charset-normalizer==3.4.2
+charset-normalizer==3.4.3
 click==8.2.0
 cryptography==44.0.3
 debtcollector==3.0.0

@@ -30,7 +30,7 @@ requestsexceptions==1.4.0
 rfc3986==2.0.0
 rich==14.1.0
 shellingham==1.5.4
-stevedore==5.4.1
+stevedore==5.5.0
 typer==0.16.1
 typing_extensions==4.15.0
 urllib3==2.5.0

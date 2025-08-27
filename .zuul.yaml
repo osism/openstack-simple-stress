@@ -17,19 +17,6 @@
         - mypy
         - openstack-simple-stress-test
         - python-black
-        - tox:
-            vars:
-              tox_envlist: test
-        - yamllint
-    gate:
-      jobs:
-        - flake8
-        - mypy
-        - openstack-simple-stress-test
-        - python-black
-        - tox:
-            vars:
-              tox_envlist: test
         - yamllint
     periodic-daily:
       jobs:
@@ -37,7 +24,4 @@
         - mypy
         - openstack-simple-stress-test
         - python-black
-        - tox:
-            vars:
-              tox_envlist: test
         - yamllint

@@ -78,10 +78,16 @@ class Cloud:
 
         logger.info(f"Checking flavor {flavor_name}")
         self.os_flavor = self.os_cloud.get_flavor(flavor_name)
+        if self.os_flavor is None:
+            logger.error(f"Flavor '{flavor_name}' not found")
+            sys.exit(1)
         logger.info(f"flavor.id = {self.os_flavor.id}")
 
         logger.info(f"Checking image {image_name}")
         self.os_image = self.os_cloud.get_image(image_name)
+        if self.os_image is None:
+            logger.error(f"Image '{image_name}' not found")
+            sys.exit(1)
         logger.info(f"image.id = {self.os_image.id}")
 
 
@@ -326,7 +332,7 @@ def run(
     volume_number: Annotated[int, typer.Option("--volume-number")] = 1,
     volume_size: Annotated[int, typer.Option("--volume-size")] = 1,
     cloud_name: Annotated[str, typer.Option("--cloud")] = "simple-stress",
-    flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-1",
+    flavor_name: Annotated[str, typer.Option("--flavor")] = "SCS-1V-2",
     image_name: Annotated[str, typer.Option("--image")] = "Ubuntu 24.04",
     subnet_cidr: Annotated[str, typer.Option("--subnet-cidr")] = "10.100.0.0/16",
     prefix: Annotated[str, typer.Option("--prefix")] = "simple-stress",

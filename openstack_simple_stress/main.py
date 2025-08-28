@@ -126,6 +126,7 @@ class Instance:
         boot_volume_size: int = 20,
         storage_zone: str = "nova",
         volume_type: str = "__DEFAULT__",
+        boot_from_volume: bool = True,
     ):
         self.cloud = cloud
 
@@ -140,6 +141,7 @@ class Instance:
             boot_volume_size,
             storage_zone,
             volume_type,
+            boot_from_volume,
         )
         self.server_name = name
 
@@ -188,6 +190,7 @@ def create(
     network: openstack.network.v2.network.Network,
     meta: Meta,
     boot_volume_size: int = 20,
+    boot_from_volume: bool = True,
 ) -> Instance:
 
     instance = Instance(
@@ -201,6 +204,7 @@ def create(
         boot_volume_size,
         storage_zone,
         volume_type,
+        boot_from_volume,
     )
 
     if volume:
@@ -261,36 +265,50 @@ def create_server(
     boot_volume_size: int = 20,
     storage_zone: str = "nova",
     volume_type: str = "__DEFAULT__",
+    boot_from_volume: bool = True,
 ) -> openstack.compute.v2.server.Server:
-    logger.info(
-        f"Creating server {name} with boot from volume (size: {boot_volume_size}GB)"
-    )
+    if boot_from_volume:
+        logger.info(
+            f"Creating server {name} with boot from volume (size: {boot_volume_size}GB)"
+        )
 
-    # Create block device mapping for boot from volume
-    block_device_mapping = [
-        {
-            "uuid": cloud.os_image.id,
-            "source_type": "image",
-            "destination_type": "volume",
-            "boot_index": 0,
-            "volume_size": boot_volume_size,
-            "delete_on_termination": True,
-        }
-    ]
+        # Create block device mapping for boot from volume
+        block_device_mapping = [
+            {
+                "uuid": cloud.os_image.id,
+                "source_type": "image",
+                "destination_type": "volume",
+                "boot_index": 0,
+                "volume_size": boot_volume_size,
+                "delete_on_termination": True,
+            }
+        ]
 
-    # Add volume_type if not default
-    if volume_type != "__DEFAULT__":
-        block_device_mapping[0]["volume_type"] = volume_type
+        # Add volume_type if not default
+        if volume_type != "__DEFAULT__":
+            block_device_mapping[0]["volume_type"] = volume_type
 
-    server = cloud.os_cloud.compute.create_server(
-        availability_zone=compute_zone,
-        name=name,
-        flavor_id=cloud.os_flavor.id,
-        networks=[{"uuid": network.id}],
-        user_data=user_data,
-        scheduler_hints={"group": server_group.id},
-        block_device_mapping=block_device_mapping,
-    )
+        server = cloud.os_cloud.compute.create_server(
+            availability_zone=compute_zone,
+            name=name,
+            flavor_id=cloud.os_flavor.id,
+            networks=[{"uuid": network.id}],
+            user_data=user_data,
+            scheduler_hints={"group": server_group.id},
+            block_device_mapping=block_device_mapping,
+        )
+    else:
+        logger.info(f"Creating server {name} with boot from local storage")
+
+        server = cloud.os_cloud.compute.create_server(
+            availability_zone=compute_zone,
+            name=name,
+            flavor_id=cloud.os_flavor.id,
+            image_id=cloud.os_image.id,
+            networks=[{"uuid": network.id}],
+            user_data=user_data,
+            scheduler_hints={"group": server_group.id},
+        )
 
     logger.info(f"Waiting for server {server.id} ({name})")
     cloud.os_cloud.compute.wait_for_server(
@@ -345,6 +363,8 @@ def run(
     debug: Annotated[bool, typer.Option("--debug")] = False,
     no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
     volume: Annotated[bool, typer.Option("--volume")] = True,
+    no_volume: Annotated[bool, typer.Option("--no-volume")] = False,
+    no_boot_volume: Annotated[bool, typer.Option("--no-boot-volume")] = False,
     no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
     interval: Annotated[int, typer.Option("--interval")] = 10,
     number: Annotated[int, typer.Option("--number")] = 1,
@@ -370,6 +390,10 @@ def run(
     delete = not no_delete
     cleanup = not no_cleanup
     meta = Meta(not no_wait, interval, timeout, delete)
+
+    # Handle volume parameters - --no-volume overrides --volume
+    if no_volume:
+        volume = False
 
     openstack.enable_logging(debug=debug, http_debug=debug)
 
@@ -428,6 +452,7 @@ def run(
                 network,
                 meta,
                 boot_volume_size,
+                not no_boot_volume,
             )
         )
 

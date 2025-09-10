@@ -22,7 +22,7 @@ oslo.config==10.0.0
 oslo.i18n==6.6.0
 pbr==7.0.1
 platformdirs==4.4.0
-pycparser==2.22
+pycparser==2.23
 Pygments==2.19.2
 PyYAML==6.0.2
 requests==2.32.5

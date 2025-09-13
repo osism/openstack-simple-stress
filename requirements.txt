@@ -5,7 +5,7 @@ click==8.2.1
 cryptography==45.0.7
 debtcollector==3.0.0
 decorator==5.2.1
-dogpile.cache==1.4.0
+dogpile.cache==1.4.1
 idna==3.10
 iso8601==2.1.0
 jmespath==1.0.1

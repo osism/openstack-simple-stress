@@ -28,7 +28,7 @@ PyYAML==6.0.3
 requests==2.32.5
 requestsexceptions==1.4.0
 rfc3986==2.0.0
-rich==14.1.0
+rich==14.2.0
 shellingham==1.5.4
 stevedore==5.5.0
 typer==0.19.2

@@ -21,7 +21,7 @@ os-service-types==1.8.2
 oslo.config==10.2.0
 oslo.i18n==6.7.1
 pbr==7.0.3
-platformdirs==4.7.0
+platformdirs==4.9.2
 pycparser==2.23
 Pygments==2.19.2
 PyYAML==6.0.3

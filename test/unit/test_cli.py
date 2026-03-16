@@ -26,6 +26,11 @@ class TestCLI(unittest.TestCase):
             "The system is finally up"
         )
 
+        # By default, find_* returns None so resources are created
+        self.mock_os_cloud.network.find_network.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+
         self.runner = CliRunner()
 
     def test_cli_0(self):

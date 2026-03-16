@@ -91,7 +91,12 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.assertEqual(mock_add_volume.call_count, 5)
         mock_add_volume.assert_called_with(
-            "unittest-0-volume-4", "StorageZone", 999, "NotDefault", ANY
+            "unittest-0-volume-4",
+            "StorageZone",
+            999,
+            "NotDefault",
+            ANY,
+            report=ANY,
         )
 
     def test_cli_8(self):
@@ -114,11 +119,11 @@ class TestCLI(unittest.TestCase):
         self.mock_os_cloud.compute.create_server.assert_called_with(
             availability_zone="ComputeZone",
             name=ANY,
-            image_id=ANY,
             flavor_id=ANY,
             networks=ANY,
             user_data=ANY,
             scheduler_hints=ANY,
+            block_device_mapping=ANY,
         )
 
     def test_cli_10(self):

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from openstack_simple_stress.main import (
     Meta,
+    Report,
     Cloud,
     Instance,
     create,
@@ -13,6 +14,7 @@ from openstack_simple_stress.main import (
 
 MOCK_META = Meta(wait=True, interval=10, timeout=20, delete=False)
 MOCK_META_2 = Meta(wait=False, interval=10, timeout=20, delete=True)
+MOCK_REPORT = Report()
 
 
 class MockVolume:
@@ -53,6 +55,7 @@ class TestInstance(TestBase):
             MagicMock(),
             MagicMock(),
             MOCK_META,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(instance.cloud, self.mock_cloud)
@@ -74,22 +77,44 @@ class TestInstance(TestBase):
             MagicMock(),
             MagicMock(),
             MOCK_META,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(len(instance.volumes), 0)
 
-        instance.add_volume("VolumeName", "StorageZone", 42, "VolumeType", MOCK_META)
+        instance.add_volume(
+            "VolumeName", "StorageZone", 42, "VolumeType", MOCK_META, report=MOCK_REPORT
+        )
 
         mock_create_volume.assert_called_with(
-            self.mock_cloud, "VolumeName", "StorageZone", 42, "VolumeType", MOCK_META
+            self.mock_cloud,
+            "VolumeName",
+            "StorageZone",
+            42,
+            "VolumeType",
+            MOCK_META,
+            report=MOCK_REPORT,
         )
         self.assertEqual(len(instance.volumes), 1)
         self.assertEqual(instance.volumes[0].id, 17)
 
-        instance.add_volume("VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META)
+        instance.add_volume(
+            "VolumeName2",
+            "StorageZone2",
+            23,
+            "VolumeType2",
+            MOCK_META,
+            report=MOCK_REPORT,
+        )
 
         mock_create_volume.assert_called_with(
-            self.mock_cloud, "VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META
+            self.mock_cloud,
+            "VolumeName2",
+            "StorageZone2",
+            23,
+            "VolumeType2",
+            MOCK_META,
+            report=MOCK_REPORT,
         )
         self.assertEqual(len(instance.volumes), 2)
 
@@ -108,11 +133,21 @@ class TestInstance(TestBase):
             MagicMock(),
             MagicMock(),
             MOCK_META,
+            report=MOCK_REPORT,
         )
-        instance.add_volume("VolumeName", "StorageZone", 42, "VolumeType", MOCK_META)
-        instance.add_volume("VolumeName2", "StorageZone2", 23, "VolumeType2", MOCK_META)
+        instance.add_volume(
+            "VolumeName", "StorageZone", 42, "VolumeType", MOCK_META, report=MOCK_REPORT
+        )
+        instance.add_volume(
+            "VolumeName2",
+            "StorageZone2",
+            23,
+            "VolumeType2",
+            MOCK_META,
+            report=MOCK_REPORT,
+        )
 
-        instance.attach_volumes()
+        instance.attach_volumes(report=MOCK_REPORT)
 
         self.assertEqual(self.mock_cloud.os_cloud.attach_volume.call_count, 2)
         self.mock_cloud.os_cloud.attach_volume.assert_called_with(
@@ -143,6 +178,7 @@ class TestCreate(TestBase):
             "VolumeType",
             MagicMock(),
             MOCK_META,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(instance.cloud, self.mock_cloud)
@@ -170,6 +206,7 @@ class TestCreate(TestBase):
             "VolumeType",
             MagicMock(),
             MOCK_META_2,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(instance.cloud, self.mock_cloud)
@@ -218,6 +255,8 @@ class TestCreate(TestBase):
             mock_server_group,
             mock_network,
             MOCK_META,
+            boot_from_volume=False,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(server.id, 7)
@@ -251,6 +290,8 @@ class TestCreate(TestBase):
             mock_server_group,
             mock_network,
             MOCK_META_2,
+            boot_from_volume=False,
+            report=MOCK_REPORT,
         )
 
         self.assertEqual(server.id, 7)
@@ -291,9 +332,10 @@ class TestDelete(TestBase):
             "VolumeType",
             MagicMock(),
             MOCK_META,
+            report=MOCK_REPORT,
         )
 
-        delete_server(instance, MOCK_META)
+        delete_server(instance, MOCK_META, report=MOCK_REPORT)
 
         self.mock_cloud.os_cloud.compute.delete_server.assert_called_with(
             instance.server

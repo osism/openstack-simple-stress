@@ -2,15 +2,21 @@
 
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 import ipaddress
 import signal
+import statistics
 import sys
+import threading
 import time
 from typing import List
 
 from loguru import logger
 import openstack
+from rich.console import Console
+from rich.table import Table
 import typer
 from typing_extensions import Annotated
 
@@ -92,6 +98,202 @@ class Meta:
         self.delete = delete
 
 
+@dataclass
+class OperationRecord:
+    operation: str
+    resource_name: str
+    duration: float
+    success: bool
+    error: str | None = None
+
+
+@contextmanager
+def _noop_track(operation: str, resource_name: str):
+    yield
+
+
+class Report:
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._records: list[OperationRecord] = []
+        self.start_time: float = time.time()
+        self.end_time: float | None = None
+        self.params: dict = {}
+
+    def record(
+        self,
+        operation: str,
+        resource_name: str,
+        duration: float,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._records.append(
+                OperationRecord(operation, resource_name, duration, success, error)
+            )
+
+    @contextmanager
+    def track(self, operation: str, resource_name: str):
+        start = time.time()
+        try:
+            yield
+            self.record(operation, resource_name, time.time() - start, True)
+        except Exception as e:
+            self.record(operation, resource_name, time.time() - start, False, str(e))
+            raise
+
+    def finalize(self) -> None:
+        self.end_time = time.time()
+
+    def print_report(self) -> None:
+        if not self._records:
+            return
+
+        console = Console()
+        total_runtime = (self.end_time or time.time()) - self.start_time
+
+        # Determine status
+        errors = [r for r in self._records if not r.success]
+        if errors:
+            status = "COMPLETED WITH ERRORS"
+        else:
+            status = "COMPLETED"
+
+        # Header
+        console.print()
+        console.print("=" * 80)
+        console.print("OPENSTACK STRESS TEST REPORT", justify="center", style="bold")
+        console.print("=" * 80)
+
+        # Test Parameters
+        p = self.params
+        console.print()
+        console.print("[bold]Test Parameters[/bold]")
+        console.print(
+            f"  Instances: {p.get('number', '?')} (parallel: {p.get('parallel', '?')})"
+        )
+        console.print(
+            f"  Flavor: {p.get('flavor', '?')} | Image: {p.get('image', '?')}"
+        )
+        console.print(
+            f"  Volumes per instance: {p.get('volume_number', '?')}"
+            f" (size: {p.get('volume_size', '?')} GB,"
+            f" type: {p.get('volume_type', '?')})"
+        )
+        console.print(
+            f"  Boot from volume: {'yes' if p.get('boot_from_volume') else 'no'}"
+            f" (size: {p.get('boot_volume_size', '?')} GB)"
+        )
+        console.print(f"  Cloud: {p.get('cloud', '?')}")
+        console.print(f"  Affinity: {p.get('affinity', '?')}")
+        console.print(
+            f"  Delete: {'yes' if p.get('delete') else 'no'}"
+            f" | Cleanup: {'yes' if p.get('cleanup') else 'no'}"
+        )
+        console.print(f"  Status: {status}")
+        console.print()
+        console.print(f"Total Runtime: {total_runtime:.2f}s")
+        console.print("=" * 80)
+
+        # Collect operations in logical order
+        op_order = [
+            "network_create",
+            "subnet_create",
+            "server_group_create",
+            "server_create",
+            "server_wait_active",
+            "server_wait_boot",
+            "volume_create",
+            "volume_attach",
+            "server_delete",
+            "volume_delete",
+            "server_group_delete",
+            "subnet_delete",
+            "network_delete",
+        ]
+
+        # Group records by operation
+        by_op: dict[str, list[OperationRecord]] = {}
+        for r in self._records:
+            by_op.setdefault(r.operation, []).append(r)
+
+        # Build table
+        table = Table(title="Operation Statistics")
+        table.add_column("Operation", style="cyan")
+        table.add_column("Count", justify="right")
+        table.add_column("Errors", justify="right", style="red")
+        table.add_column("Avg (s)", justify="right")
+        table.add_column("Min (s)", justify="right")
+        table.add_column("Max (s)", justify="right")
+        table.add_column("Med (s)", justify="right")
+        table.add_column("P95 (s)", justify="right")
+
+        total_count = 0
+        total_errors = 0
+
+        # Add rows in logical order, then any extras
+        ordered_ops = [op for op in op_order if op in by_op]
+        extra_ops = [op for op in by_op if op not in op_order]
+        for op in ordered_ops + extra_ops:
+            records = by_op[op]
+            durations = [r.duration for r in records]
+            err_count = sum(1 for r in records if not r.success)
+            total_count += len(records)
+            total_errors += err_count
+
+            avg = statistics.mean(durations)
+            med = statistics.median(durations)
+            mn = min(durations)
+            mx = max(durations)
+            if len(durations) >= 2:
+                p95 = statistics.quantiles(durations, n=20)[-1]
+            else:
+                p95 = durations[0]
+
+            err_style = "red" if err_count > 0 else ""
+            table.add_row(
+                op,
+                str(len(records)),
+                (
+                    f"[{err_style}]{err_count}[/{err_style}]"
+                    if err_style
+                    else str(err_count)
+                ),
+                f"{avg:.2f}",
+                f"{mn:.2f}",
+                f"{mx:.2f}",
+                f"{med:.2f}",
+                f"{p95:.2f}",
+            )
+
+        table.add_section()
+        table.add_row(
+            "TOTAL",
+            str(total_count),
+            str(total_errors),
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+
+        console.print()
+        console.print(table)
+
+        # Error details
+        if errors:
+            console.print()
+            console.print(f"[bold red]Errors ({len(errors)})[/bold red]")
+            for r in errors:
+                console.print(f"  [{r.operation}] {r.resource_name}: {r.error}")
+
+        console.print("=" * 80)
+        console.print()
+
+
 class Cloud:
 
     def __init__(self, cloud_name: str, flavor_name: str, image_name: str):
@@ -127,6 +329,7 @@ class Instance:
         storage_zone: str = "nova",
         volume_type: str = "__DEFAULT__",
         boot_from_volume: bool = True,
+        report: Report | None = None,
     ):
         self.cloud = cloud
 
@@ -142,6 +345,7 @@ class Instance:
             storage_zone,
             volume_type,
             boot_from_volume,
+            report=report,
         )
         self.server_name = name
 
@@ -154,6 +358,7 @@ class Instance:
         volume_size: int,
         volume_type: str,
         meta: Meta,
+        report: Report | None = None,
     ) -> None:
         volume = create_volume(
             self.cloud,
@@ -162,15 +367,18 @@ class Instance:
             volume_size,
             volume_type,
             meta,
+            report=report,
         )
         self.volumes.append(volume)
 
-    def attach_volumes(self) -> None:
+    def attach_volumes(self, report: Report | None = None) -> None:
+        track = report.track if report else _noop_track
         for volume in self.volumes:
             logger.info(
                 f"Attaching volume {volume.id} to server {self.server.id} ({self.server_name})"
             )
-            self.cloud.os_cloud.attach_volume(self.server, volume)
+            with track("volume_attach", f"{self.server_name}-vol-{volume.id}"):
+                self.cloud.os_cloud.attach_volume(self.server, volume)
 
             logger.info(f"Refreshing details of {self.server.id} ({self.server_name})")
             self.server = self.cloud.os_cloud.compute.get_server(self.server.id)
@@ -191,6 +399,7 @@ def create(
     meta: Meta,
     boot_volume_size: int = 20,
     boot_from_volume: bool = True,
+    report: Report | None = None,
 ) -> Instance:
 
     instance = Instance(
@@ -205,18 +414,24 @@ def create(
         storage_zone,
         volume_type,
         boot_from_volume,
+        report=report,
     )
 
     if volume:
         for x in range(volume_number):
             instance.add_volume(
-                f"{name}-volume-{x}", storage_zone, volume_size, volume_type, meta
+                f"{name}-volume-{x}",
+                storage_zone,
+                volume_size,
+                volume_type,
+                meta,
+                report=report,
             )
 
-    instance.attach_volumes()
+    instance.attach_volumes(report=report)
 
     if meta.delete:
-        delete_server(instance, meta)
+        delete_server(instance, meta, report=report)
     else:
         logger.info(
             f"Skipping deletion of server {instance.server.id} ({instance.server_name})"
@@ -236,20 +451,23 @@ def create_volume(
     volume_size: int,
     volume_type: str,
     meta: Meta,
+    report: Report | None = None,
 ) -> openstack.block_storage.v2.volume.Volume:
     logger.info(f"Creating volume {name}")
+    track = report.track if report else _noop_track
 
-    volume = cloud.os_cloud.block_storage.create_volume(
-        availability_zone=storage_zone,
-        name=name,
-        size=volume_size,
-        volume_type=volume_type,
-    )
+    with track("volume_create", name):
+        volume = cloud.os_cloud.block_storage.create_volume(
+            availability_zone=storage_zone,
+            name=name,
+            size=volume_size,
+            volume_type=volume_type,
+        )
 
-    logger.info(f"Waiting for volume {volume.id}")
-    cloud.os_cloud.block_storage.wait_for_status(
-        volume, status="available", interval=meta.interval, wait=meta.timeout
-    )
+        logger.info(f"Waiting for volume {volume.id}")
+        cloud.os_cloud.block_storage.wait_for_status(
+            volume, status="available", interval=meta.interval, wait=meta.timeout
+        )
 
     return volume
 
@@ -266,7 +484,10 @@ def create_server(
     storage_zone: str = "nova",
     volume_type: str = "__DEFAULT__",
     boot_from_volume: bool = True,
+    report: Report | None = None,
 ) -> openstack.compute.v2.server.Server:
+    track = report.track if report else _noop_track
+
     if boot_from_volume:
         logger.info(
             f"Creating server {name} with boot from volume (size: {boot_volume_size}GB)"
@@ -288,67 +509,73 @@ def create_server(
         if volume_type != "__DEFAULT__":
             block_device_mapping[0]["volume_type"] = volume_type
 
-        server = cloud.os_cloud.compute.create_server(
-            availability_zone=compute_zone,
-            name=name,
-            flavor_id=cloud.os_flavor.id,
-            networks=[{"uuid": network.id}],
-            user_data=user_data,
-            scheduler_hints={"group": server_group.id},
-            block_device_mapping=block_device_mapping,
-        )
+        with track("server_create", name):
+            server = cloud.os_cloud.compute.create_server(
+                availability_zone=compute_zone,
+                name=name,
+                flavor_id=cloud.os_flavor.id,
+                networks=[{"uuid": network.id}],
+                user_data=user_data,
+                scheduler_hints={"group": server_group.id},
+                block_device_mapping=block_device_mapping,
+            )
     else:
         logger.info(f"Creating server {name} with boot from local storage")
 
-        server = cloud.os_cloud.compute.create_server(
-            availability_zone=compute_zone,
-            name=name,
-            flavor_id=cloud.os_flavor.id,
-            image_id=cloud.os_image.id,
-            networks=[{"uuid": network.id}],
-            user_data=user_data,
-            scheduler_hints={"group": server_group.id},
-        )
+        with track("server_create", name):
+            server = cloud.os_cloud.compute.create_server(
+                availability_zone=compute_zone,
+                name=name,
+                flavor_id=cloud.os_flavor.id,
+                image_id=cloud.os_image.id,
+                networks=[{"uuid": network.id}],
+                user_data=user_data,
+                scheduler_hints={"group": server_group.id},
+            )
 
     logger.info(f"Waiting for server {server.id} ({name})")
-    cloud.os_cloud.compute.wait_for_server(
-        server, interval=meta.interval, wait=meta.timeout
-    )
+    with track("server_wait_active", name):
+        cloud.os_cloud.compute.wait_for_server(
+            server, interval=meta.interval, wait=meta.timeout
+        )
 
     if meta.wait:
         logger.info(f"Waiting for boot of {server.id} ({name})")
-        while True:
-            console = cloud.os_cloud.compute.get_server_console_output(server)
-            if "Failed to run module scripts-user" in str(console):
-                logger.error(f"Failed tests for {server.id} ({name})")
-            if "The system is finally up" in str(console):
-                break
-            time.sleep(1.0)
+        with track("server_wait_boot", name):
+            while True:
+                console = cloud.os_cloud.compute.get_server_console_output(server)
+                if "Failed to run module scripts-user" in str(console):
+                    logger.error(f"Failed tests for {server.id} ({name})")
+                if "The system is finally up" in str(console):
+                    break
+                time.sleep(1.0)
 
     return server
 
 
-def delete_server(instance: Instance, meta: Meta) -> None:
+def delete_server(instance: Instance, meta: Meta, report: Report | None = None) -> None:
     logger.info(f"Deleting server {instance.server.id} ({instance.server.name})")
-    instance.cloud.os_cloud.compute.delete_server(instance.server)
+    track = report.track if report else _noop_track
 
-    logger.info(
-        f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
-    )
-    instance.cloud.os_cloud.compute.wait_for_delete(
-        instance.server, interval=meta.interval, wait=meta.timeout
-    )
+    with track("server_delete", instance.server_name):
+        instance.cloud.os_cloud.compute.delete_server(instance.server)
+        logger.info(
+            f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
+        )
+        instance.cloud.os_cloud.compute.wait_for_delete(
+            instance.server, interval=meta.interval, wait=meta.timeout
+        )
 
     for volume in instance.volumes:
         logger.info(
             f"Deleting volume {volume.id} from server {instance.server.id} ({instance.server_name})"
         )
-        instance.cloud.os_cloud.block_storage.delete_volume(volume)
-
-        logger.info(f"Waiting for deletion of volume {volume.id}")
-        instance.cloud.os_cloud.block_storage.wait_for_delete(
-            volume, interval=meta.interval, wait=meta.timeout
-        )
+        with track("volume_delete", f"{instance.server_name}-vol-{volume.id}"):
+            instance.cloud.os_cloud.block_storage.delete_volume(volume)
+            logger.info(f"Waiting for deletion of volume {volume.id}")
+            instance.cloud.os_cloud.block_storage.wait_for_delete(
+                volume, interval=meta.interval, wait=meta.timeout
+            )
 
 
 class AffinitySetting(str, Enum):
@@ -407,7 +634,22 @@ def run(
 
     b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
 
-    start = time.time()
+    report = Report()
+    report.params = {
+        "number": number,
+        "parallel": parallel,
+        "flavor": flavor_name,
+        "image": image_name,
+        "volume_number": volume_number,
+        "volume_size": volume_size,
+        "volume_type": volume_type,
+        "boot_from_volume": not no_boot_volume,
+        "boot_volume_size": boot_volume_size,
+        "cloud": cloud_name,
+        "affinity": affinity.value,
+        "delete": delete,
+        "cleanup": cleanup,
+    }
 
     cloud = Cloud(cloud_name, flavor_name, image_name)
 
@@ -417,7 +659,8 @@ def run(
         logger.info(f"Using existing network {prefix}")
     else:
         logger.info(f"Creating network {prefix}")
-        network = cloud.os_cloud.network.create_network(name=prefix)
+        with report.track("network_create", prefix):
+            network = cloud.os_cloud.network.create_network(name=prefix)
         network_created = True
 
     subnet_name = f"{prefix}-subnet"
@@ -433,12 +676,13 @@ def run(
             logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
             subnet_cidr = "10.100.0.0/16"
 
-        subnet = cloud.os_cloud.network.create_subnet(
-            name=subnet_name,
-            network_id=network.id,
-            ip_version="4",
-            cidr=subnet_cidr,
-        )
+        with report.track("subnet_create", subnet_name):
+            subnet = cloud.os_cloud.network.create_subnet(
+                name=subnet_name,
+                network_id=network.id,
+                ip_version="4",
+                cidr=subnet_cidr,
+            )
         subnet_created = True
 
     server_group = cloud.os_cloud.compute.find_server_group(prefix)
@@ -447,9 +691,10 @@ def run(
         logger.info(f"Using existing server group {prefix}")
     else:
         logger.info(f"Creating server group {prefix}")
-        server_group = cloud.os_cloud.compute.create_server_group(
-            name=prefix, policies=[affinity.value]
-        )
+        with report.track("server_group_create", prefix):
+            server_group = cloud.os_cloud.compute.create_server_group(
+                name=prefix, policies=[affinity.value]
+            )
         server_group_created = True
 
     pool = ThreadPoolExecutor(max_workers=parallel)
@@ -472,6 +717,7 @@ def run(
                 meta,
                 boot_volume_size,
                 not no_boot_volume,
+                report,
             )
         )
 
@@ -502,7 +748,7 @@ def run(
     logger.info("Performing cleanup...")
     for instance in completed_instances:
         if cleanup and not delete:
-            futures_delete.append(pool.submit(delete_server, instance, meta))
+            futures_delete.append(pool.submit(delete_server, instance, meta, report))
 
     # Wait for deletion to complete
     for f in as_completed(futures_delete):
@@ -520,11 +766,12 @@ def run(
                     logger.info(f"Checking and deleting volume {vol.id}")
                     existing_volume = cloud.os_cloud.block_storage.get_volume(vol.id)
                     if existing_volume:
-                        cloud.os_cloud.block_storage.delete_volume(vol)
-                        logger.info(f"Waiting for deletion of volume {vol.id}")
-                        cloud.os_cloud.block_storage.wait_for_delete(
-                            vol, interval=meta.interval, wait=meta.timeout
-                        )
+                        with report.track("volume_delete", f"cleanup-{vol.id}"):
+                            cloud.os_cloud.block_storage.delete_volume(vol)
+                            logger.info(f"Waiting for deletion of volume {vol.id}")
+                            cloud.os_cloud.block_storage.wait_for_delete(
+                                vol, interval=meta.interval, wait=meta.timeout
+                            )
                 except Exception as e:
                     logger.error(f"Error deleting volume {vol.id}: {e}")
 
@@ -532,32 +779,36 @@ def run(
     if server_group_created:
         try:
             logger.info(f"Deleting server group {prefix}")
-            cloud.os_cloud.compute.delete_server_group(server_group)
+            with report.track("server_group_delete", prefix):
+                cloud.os_cloud.compute.delete_server_group(server_group)
         except Exception as e:
             logger.error(f"Error deleting server group: {e}")
 
     if subnet_created:
         try:
             logger.info(f"Deleting subnet {prefix}-subnet")
-            cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+            with report.track("subnet_delete", subnet_name):
+                cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
         except Exception as e:
             logger.error(f"Error deleting subnet: {e}")
 
     if network_created:
         try:
             logger.info(f"Deleting network {prefix}")
-            cloud.os_cloud.network.delete_network(network, ignore_missing=False)
+            with report.track("network_delete", prefix):
+                cloud.os_cloud.network.delete_network(network, ignore_missing=False)
         except Exception as e:
             logger.error(f"Error deleting network: {e}")
 
-    end = time.time()
+    report.finalize()
+    report.print_report()
+
+    runtime = (report.end_time or time.time()) - report.start_time
 
     if shutdown_requested:
-        logger.info(
-            f"Test was aborted - cleanup completed. Runtime: {(end-start):.4f}s"
-        )
+        logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
     else:
-        logger.info(f"Test completed successfully. Runtime: {(end-start):.4f}s")
+        logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
 
 
 def main() -> None:

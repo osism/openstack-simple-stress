@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import ipaddress
+
 import signal
 import statistics
 import sys
@@ -172,7 +173,8 @@ class Report:
         console.print()
         console.print("[bold]Test Parameters[/bold]")
         console.print(
-            f"  Instances: {p.get('number', '?')} (parallel: {p.get('parallel', '?')})"
+            f"  Instances: {p.get('number', '?')} (parallel: {p.get('parallel', '?')},"
+            f" mode: {p.get('mode', '?')})"
         )
         console.print(
             f"  Flavor: {p.get('flavor', '?')} | Image: {p.get('image', '?')}"
@@ -585,6 +587,11 @@ class AffinitySetting(str, Enum):
     hard_anti = "anti-affinity"
 
 
+class ExecutionMode(str, Enum):
+    rolling = "rolling"
+    block = "block"
+
+
 def run(
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
@@ -596,6 +603,7 @@ def run(
     interval: Annotated[int, typer.Option("--interval")] = 10,
     number: Annotated[int, typer.Option("--number")] = 1,
     parallel: Annotated[int, typer.Option("--parallel")] = 1,
+    mode: Annotated[ExecutionMode, typer.Option("--mode")] = ExecutionMode.rolling,
     timeout: Annotated[int, typer.Option("--timeout")] = 600,
     volume_number: Annotated[int, typer.Option("--volume-number")] = 1,
     volume_size: Annotated[int, typer.Option("--volume-size")] = 1,
@@ -638,6 +646,7 @@ def run(
     report.params = {
         "number": number,
         "parallel": parallel,
+        "mode": mode.value,
         "flavor": flavor_name,
         "image": image_name,
         "volume_number": volume_number,
@@ -697,58 +706,108 @@ def run(
             )
         server_group_created = True
 
-    pool = ThreadPoolExecutor(max_workers=parallel)
-    futures_create = []
-    for x in range(number):
-        futures_create.append(
-            pool.submit(
-                create,
-                cloud,
-                f"{prefix}-{x}",
-                b64_user_data,
-                compute_zone,
-                volume,
-                volume_number,
-                storage_zone,
-                volume_size,
-                server_group,
-                volume_type,
-                network,
-                meta,
-                boot_volume_size,
-                not no_boot_volume,
-                report,
-            )
-        )
-
-    futures_delete = []
     completed_instances = []
 
-    # Process completed futures, check for shutdown requests
-    for future in as_completed(futures_create):
+    def _submit_create(pool, server_index):
+        return pool.submit(
+            create,
+            cloud,
+            f"{prefix}-{server_index}",
+            b64_user_data,
+            compute_zone,
+            volume,
+            volume_number,
+            storage_zone,
+            volume_size,
+            server_group,
+            volume_type,
+            network,
+            meta,
+            boot_volume_size,
+            not no_boot_volume,
+            report,
+        )
+
+    if mode == ExecutionMode.block:
+        total_blocks = -(-number // parallel)
+        pool = ThreadPoolExecutor(max_workers=parallel)
+        for block_idx in range(total_blocks):
+            if shutdown_requested:
+                logger.warning("Shutdown requested - skipping remaining blocks...")
+                break
+
+            start = block_idx * parallel
+            end = min(start + parallel, number)
+            block_size = end - start
+
+            logger.info(
+                f"Starting block {block_idx + 1}/{total_blocks}"
+                f" (servers {start}-{end - 1}, count: {block_size})"
+            )
+
+            futures_create = []
+            for x in range(start, end):
+                futures_create.append(_submit_create(pool, x))
+
+            block_aborted = False
+            for future in as_completed(futures_create):
+                if shutdown_requested:
+                    logger.warning("Shutdown requested - aborting current block...")
+                    for f in futures_create:
+                        if not f.done():
+                            f.cancel()
+                    block_aborted = True
+                    break
+
+                try:
+                    instance = future.result()
+                    completed_instances.append(instance)
+                    logger.info(f"Server {instance.server.id} finished")
+                except Exception as e:
+                    logger.error(f"Error creating server: {e}")
+
+            if block_aborted:
+                logger.info(f"Block {block_idx + 1}/{total_blocks} aborted")
+            else:
+                logger.info(f"Block {block_idx + 1}/{total_blocks} completed")
+        pool.shutdown(wait=True)
+    else:
+        pool = ThreadPoolExecutor(max_workers=parallel)
+        futures_create = []
+        for x in range(number):
+            futures_create.append(_submit_create(pool, x))
+
+        # Process completed futures, check for shutdown requests
+        for future in as_completed(futures_create):
+            if shutdown_requested:
+                logger.warning("Shutdown requested - aborting current iteration...")
+                break
+
+            try:
+                instance = future.result()
+                completed_instances.append(instance)
+                logger.info(f"Server {instance.server.id} finished")
+            except Exception as e:
+                logger.error(f"Error creating server: {e}")
+
+        # Cancel remaining futures if shutdown was requested
         if shutdown_requested:
-            logger.warning("Shutdown requested - aborting current iteration...")
-            break
+            logger.info("Stopping remaining operations...")
+            for future in futures_create:
+                if not future.done():
+                    future.cancel()
 
-        try:
-            instance = future.result()
-            completed_instances.append(instance)
-            logger.info(f"Server {instance.server.id} finished")
-        except Exception as e:
-            logger.error(f"Error creating server: {e}")
-
-    # Cancel remaining futures if shutdown was requested
-    if shutdown_requested:
-        logger.info("Stopping remaining operations...")
-        for future in futures_create:
-            if not future.done():
-                future.cancel()
+        pool.shutdown(wait=True)
 
     # Always perform cleanup, even if shutdown was requested
     logger.info("Performing cleanup...")
+    futures_delete = []
+    cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
     for instance in completed_instances:
         if cleanup and not delete:
-            futures_delete.append(pool.submit(delete_server, instance, meta, report))
+            futures_delete.append(
+                cleanup_pool.submit(delete_server, instance, meta, report)
+            )
 
     # Wait for deletion to complete
     for f in as_completed(futures_delete):
@@ -756,6 +815,7 @@ def run(
             f.result()
         except Exception as e:
             logger.error(f"Error deleting resources: {e}")
+    cleanup_pool.shutdown(wait=True)
 
     # Ensure all volumes are cleaned up, especially if shutdown was requested
     if shutdown_requested or (cleanup and not delete):

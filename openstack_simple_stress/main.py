@@ -411,27 +411,46 @@ def run(
 
     cloud = Cloud(cloud_name, flavor_name, image_name)
 
-    logger.info(f"Creating network {prefix}")
-    network = cloud.os_cloud.network.create_network(name=prefix)
+    network = cloud.os_cloud.network.find_network(prefix)
+    network_created = False
+    if network:
+        logger.info(f"Using existing network {prefix}")
+    else:
+        logger.info(f"Creating network {prefix}")
+        network = cloud.os_cloud.network.create_network(name=prefix)
+        network_created = True
 
-    logger.info(f"Creating subnet {prefix}-subnet")
-    try:
-        ipaddress.ip_network(subnet_cidr)
-    except ValueError:
-        logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
-        subnet_cidr = "10.100.0.0/16"
+    subnet_name = f"{prefix}-subnet"
+    subnet = cloud.os_cloud.network.find_subnet(subnet_name)
+    subnet_created = False
+    if subnet:
+        logger.info(f"Using existing subnet {subnet_name}")
+    else:
+        logger.info(f"Creating subnet {subnet_name}")
+        try:
+            ipaddress.ip_network(subnet_cidr)
+        except ValueError:
+            logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
+            subnet_cidr = "10.100.0.0/16"
 
-    subnet = cloud.os_cloud.network.create_subnet(
-        name=f"{prefix}-subnet",
-        network_id=network.id,
-        ip_version="4",
-        cidr=subnet_cidr,
-    )
+        subnet = cloud.os_cloud.network.create_subnet(
+            name=subnet_name,
+            network_id=network.id,
+            ip_version="4",
+            cidr=subnet_cidr,
+        )
+        subnet_created = True
 
-    logger.info(f"Creating server group {prefix}")
-    server_group = cloud.os_cloud.compute.create_server_group(
-        name=prefix, policies=[affinity.value]
-    )
+    server_group = cloud.os_cloud.compute.find_server_group(prefix)
+    server_group_created = False
+    if server_group:
+        logger.info(f"Using existing server group {prefix}")
+    else:
+        logger.info(f"Creating server group {prefix}")
+        server_group = cloud.os_cloud.compute.create_server_group(
+            name=prefix, policies=[affinity.value]
+        )
+        server_group_created = True
 
     pool = ThreadPoolExecutor(max_workers=parallel)
     futures_create = []
@@ -510,23 +529,26 @@ def run(
                     logger.error(f"Error deleting volume {vol.id}: {e}")
 
     # Always clean up infrastructure resources
-    try:
-        logger.info(f"Deleting server group {prefix}")
-        cloud.os_cloud.compute.delete_server_group(server_group)
-    except Exception as e:
-        logger.error(f"Error deleting server group: {e}")
+    if server_group_created:
+        try:
+            logger.info(f"Deleting server group {prefix}")
+            cloud.os_cloud.compute.delete_server_group(server_group)
+        except Exception as e:
+            logger.error(f"Error deleting server group: {e}")
 
-    try:
-        logger.info(f"Deleting subnet {prefix}-subnet")
-        cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
-    except Exception as e:
-        logger.error(f"Error deleting subnet: {e}")
+    if subnet_created:
+        try:
+            logger.info(f"Deleting subnet {prefix}-subnet")
+            cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+        except Exception as e:
+            logger.error(f"Error deleting subnet: {e}")
 
-    try:
-        logger.info(f"Deleting network {prefix}")
-        cloud.os_cloud.network.delete_network(network, ignore_missing=False)
-    except Exception as e:
-        logger.error(f"Error deleting network: {e}")
+    if network_created:
+        try:
+            logger.info(f"Deleting network {prefix}")
+            cloud.os_cloud.network.delete_network(network, ignore_missing=False)
+        except Exception as e:
+            logger.error(f"Error deleting network: {e}")
 
     end = time.time()
 

@@ -9,3 +9,8 @@
     - role: tox
       vars:
         tox_extra_args: -- --cloud openstack --image cirros --debug --no-wait
+    - role: tox
+      vars:
+        tox_extra_args: >-
+          -- --cloud openstack --image cirros --debug
+          --no-wait --mode block --number 4 --parallel 2

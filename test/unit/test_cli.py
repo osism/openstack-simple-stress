@@ -192,6 +192,33 @@ class TestCLI(unittest.TestCase):
             cidr="10.100.0.0/16",
         )
 
+    def test_default_mode_is_rolling(self):
+        result = self.runner.invoke(app, ["--help"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertIn("rolling", result.stdout)
+
+    @patch("openstack_simple_stress.main.create")
+    def test_mode_rolling_explicit(self, mock_create):
+        result = self.runner.invoke(app, ["--mode=rolling", "--number=3"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertEqual(mock_create.call_count, 3)
+
+    @patch("openstack_simple_stress.main.create")
+    def test_mode_block(self, mock_create):
+        result = self.runner.invoke(app, ["--mode=block", "--number=4", "--parallel=2"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertEqual(mock_create.call_count, 4)
+
+    @patch("openstack_simple_stress.main.create")
+    def test_mode_block_uneven(self, mock_create):
+        result = self.runner.invoke(app, ["--mode=block", "--number=5", "--parallel=2"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertEqual(mock_create.call_count, 5)
+
+    def test_mode_invalid(self):
+        result = self.runner.invoke(app, ["--mode=invalid"])
+        self.assertNotEqual(result.exit_code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

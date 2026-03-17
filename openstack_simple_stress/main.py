@@ -5,7 +5,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from importlib import resources
 import ipaddress
+from pathlib import Path
 
 import signal
 import statistics
@@ -14,6 +16,7 @@ import threading
 import time
 from typing import List
 
+import click
 from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
@@ -21,6 +24,7 @@ from rich.console import Console
 from rich.table import Table
 import typer
 from typing_extensions import Annotated
+import yaml
 
 log_fmt = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
@@ -31,6 +35,88 @@ logger.remove()
 logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
 
 shutdown_requested = False
+
+VALID_PROFILE_KEYS = {
+    "clean",
+    "no_cleanup",
+    "debug",
+    "no_delete",
+    "volume",
+    "no_volume",
+    "no_boot_volume",
+    "no_wait",
+    "interval",
+    "number",
+    "parallel",
+    "mode",
+    "timeout",
+    "volume_number",
+    "volume_size",
+    "cloud",
+    "flavor",
+    "image",
+    "subnet_cidr",
+    "prefix",
+    "compute_zone",
+    "storage_zone",
+    "affinity",
+    "volume_type",
+    "boot_volume_size",
+}
+
+PROFILE_KEY_TO_PARAM = {
+    "cloud": "cloud_name",
+    "flavor": "flavor_name",
+    "image": "image_name",
+}
+
+
+def _resolve_builtin_profile(name: str) -> Path | None:
+    """Resolve a built-in profile name to its path using importlib.resources."""
+    candidates = [name]
+    if not name.endswith((".yaml", ".yml")):
+        candidates.append(f"{name}.yaml")
+
+    for candidate in candidates:
+        ref = resources.files("openstack_simple_stress.profiles").joinpath(candidate)
+        try:
+            with resources.as_file(ref) as p:
+                if p.exists():
+                    return p
+        except (FileNotFoundError, TypeError):
+            continue
+    return None
+
+
+def load_profile(profile_path: str) -> dict:
+    """Load a YAML profile and return the parameter dict."""
+    path = Path(profile_path)
+
+    if not path.exists():
+        resolved = _resolve_builtin_profile(profile_path)
+        if resolved is not None:
+            path = resolved
+
+    if not path.exists():
+        logger.error(f"Profile '{profile_path}' not found")
+        sys.exit(1)
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    if data is None:
+        return {}
+
+    if not isinstance(data, dict):
+        logger.error(f"Profile '{path}' must be a YAML mapping")
+        sys.exit(1)
+
+    unknown = set(data.keys()) - VALID_PROFILE_KEYS
+    if unknown:
+        logger.warning(f"Unknown keys in profile: {', '.join(sorted(unknown))}")
+
+    logger.info(f"Loaded profile '{path}'")
+    return data
 
 
 def signal_handler(signum, frame):
@@ -173,6 +259,8 @@ class Report:
         p = self.params
         console.print()
         console.print("[bold]Test Parameters[/bold]")
+        if p.get("profile"):
+            console.print(f"  Profile: {p.get('profile')}")
         console.print(
             f"  Instances: {p.get('number', '?')} (parallel: {p.get('parallel', '?')},"
             f" mode: {p.get('mode', '?')})"
@@ -717,6 +805,10 @@ def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
 
 
 def run(
+    ctx: typer.Context,
+    profile: Annotated[
+        str, typer.Option("--profile", help="Path to a YAML profile file")
+    ] = "",
     clean: Annotated[bool, typer.Option("--clean")] = False,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
@@ -745,6 +837,51 @@ def run(
     volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
     boot_volume_size: Annotated[int, typer.Option("--boot-volume-size")] = 20,
 ) -> None:
+    # Apply profile overrides (CLI flags take precedence over profile values)
+    if profile:
+        p = load_profile(profile)
+
+        def _apply(yaml_key, current):
+            if yaml_key not in p:
+                return current
+            param_name = PROFILE_KEY_TO_PARAM.get(yaml_key, yaml_key)
+            source = ctx.get_parameter_source(param_name)
+            if source == click.core.ParameterSource.DEFAULT:
+                return p[yaml_key]
+            return current
+
+        clean = _apply("clean", clean)
+        no_cleanup = _apply("no_cleanup", no_cleanup)
+        debug = _apply("debug", debug)
+        no_delete = _apply("no_delete", no_delete)
+        volume = _apply("volume", volume)
+        no_volume = _apply("no_volume", no_volume)
+        no_boot_volume = _apply("no_boot_volume", no_boot_volume)
+        no_wait = _apply("no_wait", no_wait)
+        interval = _apply("interval", interval)
+        number = _apply("number", number)
+        parallel = _apply("parallel", parallel)
+        mode = _apply("mode", mode)
+        timeout = _apply("timeout", timeout)
+        volume_number = _apply("volume_number", volume_number)
+        volume_size = _apply("volume_size", volume_size)
+        cloud_name = _apply("cloud", cloud_name)
+        flavor_name = _apply("flavor", flavor_name)
+        image_name = _apply("image", image_name)
+        subnet_cidr = _apply("subnet_cidr", subnet_cidr)
+        prefix = _apply("prefix", prefix)
+        compute_zone = _apply("compute_zone", compute_zone)
+        storage_zone = _apply("storage_zone", storage_zone)
+        affinity = _apply("affinity", affinity)
+        volume_type = _apply("volume_type", volume_type)
+        boot_volume_size = _apply("boot_volume_size", boot_volume_size)
+
+        # Convert string values from YAML to enums
+        if isinstance(mode, str):
+            mode = ExecutionMode(mode)
+        if isinstance(affinity, str):
+            affinity = AffinitySetting(affinity)
+
     # Clean mode: find and delete leftover resources from a previous run
     if clean:
         clean_resources(cloud_name, prefix, debug)
@@ -774,6 +911,7 @@ def run(
 
     report = Report()
     report.params = {
+        "profile": profile or None,
         "number": number,
         "parallel": parallel,
         "mode": mode.value,

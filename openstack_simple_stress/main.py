@@ -14,6 +14,7 @@ import threading
 import time
 from typing import List
 
+from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
 from rich.console import Console
@@ -592,7 +593,131 @@ class ExecutionMode(str, Enum):
     block = "block"
 
 
+def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
+    """Find and delete all resources from a previous run with the given prefix."""
+
+    openstack.enable_logging(debug=debug, http_debug=debug)
+    os_cloud = openstack.connect(cloud=cloud_name)
+
+    console = Console()
+
+    # Find all resources with the prefix
+    resources: list[tuple[str, str, str, str]] = []
+
+    logger.info(f"Searching for servers with prefix '{prefix}'...")
+    servers = list(os_cloud.compute.servers(name=f"^{prefix}-"))
+    for s in servers:
+        resources.append(("Server", s.name, s.id, s.status))
+
+    logger.info(f"Searching for volumes with prefix '{prefix}'...")
+    matching_volumes = []
+    try:
+        volumes = list(os_cloud.block_storage.volumes(details=True))
+        matching_volumes = [
+            v for v in volumes if v.name and v.name.startswith(f"{prefix}-")
+        ]
+        for v in matching_volumes:
+            resources.append(("Volume", v.name, v.id, v.status))
+    except EndpointNotFound:
+        logger.warning("Block storage service not available, skipping volume cleanup")
+
+    logger.info(f"Searching for server group '{prefix}'...")
+    server_group = os_cloud.compute.find_server_group(prefix)
+    if server_group:
+        resources.append(("Server Group", server_group.name, server_group.id, ""))
+
+    subnet_name = f"{prefix}-subnet"
+    logger.info(f"Searching for subnet '{subnet_name}'...")
+    subnet = os_cloud.network.find_subnet(subnet_name)
+    if subnet:
+        resources.append(("Subnet", subnet.name, subnet.id, ""))
+
+    logger.info(f"Searching for network '{prefix}'...")
+    network = os_cloud.network.find_network(prefix)
+    if network:
+        resources.append(("Network", network.name, network.id, ""))
+
+    if not resources:
+        logger.info(f"No resources found with prefix '{prefix}'")
+        return
+
+    # Display found resources
+    table = Table(title=f"Resources found with prefix '{prefix}'")
+    table.add_column("Type", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("ID")
+    table.add_column("Status")
+
+    for r_type, r_name, r_id, r_status in resources:
+        table.add_row(r_type, r_name, r_id, r_status)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+    # Ask for confirmation
+    try:
+        response = (
+            input(f"Delete all {len(resources)} resource(s)? (y/N): ").strip().lower()
+        )
+    except (EOFError, KeyboardInterrupt):
+        logger.info("\nAborted.")
+        return
+
+    if response not in ["y", "yes"]:
+        logger.info("Aborted.")
+        return
+
+    # Delete in order: servers, volumes, server group, subnet, network
+    for s in servers:
+        try:
+            logger.info(f"Deleting server {s.name} ({s.id})")
+            os_cloud.compute.delete_server(s)
+            os_cloud.compute.wait_for_delete(s)
+            logger.info(f"Server {s.name} deleted")
+        except Exception as e:
+            logger.error(f"Error deleting server {s.name}: {e}")
+
+    for v in matching_volumes:
+        try:
+            logger.info(f"Deleting volume {v.name} ({v.id})")
+            os_cloud.block_storage.delete_volume(v)
+            os_cloud.block_storage.wait_for_delete(v)
+            logger.info(f"Volume {v.name} deleted")
+        except Exception as e:
+            logger.error(f"Error deleting volume {v.name}: {e}")
+
+    if server_group:
+        try:
+            logger.info(
+                f"Deleting server group {server_group.name} ({server_group.id})"
+            )
+            os_cloud.compute.delete_server_group(server_group)
+            logger.info(f"Server group {server_group.name} deleted")
+        except Exception as e:
+            logger.error(f"Error deleting server group: {e}")
+
+    if subnet:
+        try:
+            logger.info(f"Deleting subnet {subnet.name} ({subnet.id})")
+            os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+            logger.info(f"Subnet {subnet.name} deleted")
+        except Exception as e:
+            logger.error(f"Error deleting subnet: {e}")
+
+    if network:
+        try:
+            logger.info(f"Deleting network {network.name} ({network.id})")
+            os_cloud.network.delete_network(network, ignore_missing=False)
+            logger.info(f"Network {network.name} deleted")
+        except Exception as e:
+            logger.error(f"Error deleting network: {e}")
+
+    logger.info("Cleanup completed")
+
+
 def run(
+    clean: Annotated[bool, typer.Option("--clean")] = False,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
     no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
@@ -620,6 +745,11 @@ def run(
     volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
     boot_volume_size: Annotated[int, typer.Option("--boot-volume-size")] = 20,
 ) -> None:
+    # Clean mode: find and delete leftover resources from a previous run
+    if clean:
+        clean_resources(cloud_name, prefix, debug)
+        return
+
     # Register signal handler for CTRL+C
     signal.signal(signal.SIGINT, signal_handler)
     delete = not no_delete

@@ -219,6 +219,127 @@ class TestCLI(unittest.TestCase):
         result = self.runner.invoke(app, ["--mode=invalid"])
         self.assertNotEqual(result.exit_code, 0)
 
+    def test_clean_no_resources(self):
+        self.mock_os_cloud.compute.servers.return_value = []
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        # Should not attempt any deletions
+        self.mock_os_cloud.compute.delete_server.assert_not_called()
+        # Should not validate flavor/image
+        self.mock_os_cloud.get_flavor.assert_not_called()
+        self.mock_os_cloud.get_image.assert_not_called()
+
+    def test_clean_with_resources_confirmed(self):
+        mock_server = MagicMock()
+        mock_server.name = "simple-stress-0"
+        mock_server.id = "srv-123"
+        mock_server.status = "ACTIVE"
+        self.mock_os_cloud.compute.servers.return_value = [mock_server]
+
+        mock_volume = MagicMock()
+        mock_volume.name = "simple-stress-0-volume-0"
+        mock_volume.id = "vol-456"
+        mock_volume.status = "in-use"
+        self.mock_os_cloud.block_storage.volumes.return_value = [mock_volume]
+
+        mock_server_group = MagicMock()
+        mock_server_group.name = "simple-stress"
+        mock_server_group.id = "sg-789"
+        self.mock_os_cloud.compute.find_server_group.return_value = mock_server_group
+
+        mock_subnet = MagicMock()
+        mock_subnet.name = "simple-stress-subnet"
+        mock_subnet.id = "sub-abc"
+        self.mock_os_cloud.network.find_subnet.return_value = mock_subnet
+
+        mock_network = MagicMock()
+        mock_network.name = "simple-stress"
+        mock_network.id = "net-def"
+        self.mock_os_cloud.network.find_network.return_value = mock_network
+
+        result = self.runner.invoke(app, ["--clean"], input="y\n")
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.delete_server.assert_called_once_with(mock_server)
+        self.mock_os_cloud.compute.wait_for_delete.assert_called_once_with(mock_server)
+        self.mock_os_cloud.block_storage.delete_volume.assert_called_once_with(
+            mock_volume
+        )
+        self.mock_os_cloud.block_storage.wait_for_delete.assert_called_once_with(
+            mock_volume
+        )
+        self.mock_os_cloud.compute.delete_server_group.assert_called_once_with(
+            mock_server_group
+        )
+        self.mock_os_cloud.network.delete_subnet.assert_called_once_with(
+            mock_subnet, ignore_missing=False
+        )
+        self.mock_os_cloud.network.delete_network.assert_called_once_with(
+            mock_network, ignore_missing=False
+        )
+
+    def test_clean_with_resources_denied(self):
+        mock_server = MagicMock()
+        mock_server.name = "simple-stress-0"
+        mock_server.id = "srv-123"
+        mock_server.status = "ACTIVE"
+        self.mock_os_cloud.compute.servers.return_value = [mock_server]
+
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean"], input="n\n")
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        # Should not delete anything
+        self.mock_os_cloud.compute.delete_server.assert_not_called()
+
+    def test_clean_with_custom_prefix(self):
+        self.mock_os_cloud.compute.servers.return_value = []
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean", "--prefix=mytest"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.servers.assert_called_once_with(name="^mytest-")
+        self.mock_os_cloud.compute.find_server_group.assert_called_with("mytest")
+        self.mock_os_cloud.network.find_subnet.assert_called_with("mytest-subnet")
+        self.mock_os_cloud.network.find_network.assert_called_with("mytest")
+
+    def test_clean_skips_non_matching_volumes(self):
+        mock_volume_match = MagicMock()
+        mock_volume_match.name = "simple-stress-0-volume-0"
+        mock_volume_match.id = "vol-match"
+        mock_volume_match.status = "available"
+
+        mock_volume_other = MagicMock()
+        mock_volume_other.name = "other-project-volume"
+        mock_volume_other.id = "vol-other"
+        mock_volume_other.status = "available"
+
+        self.mock_os_cloud.compute.servers.return_value = []
+        self.mock_os_cloud.block_storage.volumes.return_value = [
+            mock_volume_match,
+            mock_volume_other,
+        ]
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean"], input="y\n")
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        # Only matching volume should be deleted
+        self.mock_os_cloud.block_storage.delete_volume.assert_called_once_with(
+            mock_volume_match
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

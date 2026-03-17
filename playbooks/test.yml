@@ -14,3 +14,6 @@
         tox_extra_args: >-
           -- --cloud openstack --image cirros --debug
           --no-wait --mode block --number 4 --parallel 2
+    - role: tox
+      vars:
+        tox_extra_args: -- --cloud openstack --clean

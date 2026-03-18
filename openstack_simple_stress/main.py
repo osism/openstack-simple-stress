@@ -681,7 +681,9 @@ class ExecutionMode(str, Enum):
     block = "block"
 
 
-def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
+def clean_resources(
+    cloud_name: str, prefix: str, debug: bool, parallel: int = 1
+) -> None:
     """Find and delete all resources from a previous run with the given prefix."""
 
     openstack.enable_logging(debug=debug, http_debug=debug)
@@ -757,7 +759,7 @@ def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
         return
 
     # Delete in order: servers, volumes, server group, subnet, network
-    for s in servers:
+    def _delete_server(s: openstack.compute.v2.server.Server) -> None:
         try:
             logger.info(f"Deleting server {s.name} ({s.id})")
             os_cloud.compute.delete_server(s)
@@ -766,7 +768,7 @@ def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
         except Exception as e:
             logger.error(f"Error deleting server {s.name}: {e}")
 
-    for v in matching_volumes:
+    def _delete_volume(v: openstack.block_storage.v2.volume.Volume) -> None:
         try:
             logger.info(f"Deleting volume {v.name} ({v.id})")
             os_cloud.block_storage.delete_volume(v)
@@ -774,6 +776,18 @@ def clean_resources(cloud_name: str, prefix: str, debug: bool) -> None:
             logger.info(f"Volume {v.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting volume {v.name}: {e}")
+
+    # Delete servers first; volumes may still be attached and cannot be
+    # removed until their server is gone.
+    with ThreadPoolExecutor(max_workers=parallel) as pool:
+        futures = [pool.submit(_delete_server, s) for s in servers]
+        for future in as_completed(futures):
+            future.result()
+
+    with ThreadPoolExecutor(max_workers=parallel) as pool:
+        futures = [pool.submit(_delete_volume, v) for v in matching_volumes]
+        for future in as_completed(futures):
+            future.result()
 
     if server_group:
         try:
@@ -884,7 +898,7 @@ def run(
 
     # Clean mode: find and delete leftover resources from a previous run
     if clean:
-        clean_resources(cloud_name, prefix, debug)
+        clean_resources(cloud_name, prefix, debug, parallel)
         return
 
     # Register signal handler for CTRL+C

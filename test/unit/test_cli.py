@@ -340,6 +340,36 @@ class TestCLI(unittest.TestCase):
             mock_volume_match
         )
 
+    def test_clean_with_parallel(self):
+        mock_servers = []
+        for i in range(3):
+            s = MagicMock()
+            s.name = f"simple-stress-{i}"
+            s.id = f"srv-{i}"
+            s.status = "ACTIVE"
+            mock_servers.append(s)
+        self.mock_os_cloud.compute.servers.return_value = mock_servers
+
+        mock_volumes = []
+        for i in range(2):
+            v = MagicMock()
+            v.name = f"simple-stress-{i}-volume-0"
+            v.id = f"vol-{i}"
+            v.status = "in-use"
+            mock_volumes.append(v)
+        self.mock_os_cloud.block_storage.volumes.return_value = mock_volumes
+
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean", "--parallel=2"], input="y\n")
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertEqual(self.mock_os_cloud.compute.delete_server.call_count, 3)
+        self.assertEqual(self.mock_os_cloud.compute.wait_for_delete.call_count, 3)
+        self.assertEqual(self.mock_os_cloud.block_storage.delete_volume.call_count, 2)
+        self.assertEqual(self.mock_os_cloud.block_storage.wait_for_delete.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

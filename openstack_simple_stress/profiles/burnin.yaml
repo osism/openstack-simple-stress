@@ -1,0 +1,8 @@
+# Burnin mode - create instances running stress-ng CPU tests
+# Instances run for the configured duration before cleanup
+burnin: true
+burnin_duration: 48
+number: 10
+parallel: 5
+no_wait: true
+volume: false

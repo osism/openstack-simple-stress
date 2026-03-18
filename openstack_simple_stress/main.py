@@ -62,6 +62,8 @@ VALID_PROFILE_KEYS = {
     "affinity",
     "volume_type",
     "boot_volume_size",
+    "burnin",
+    "burnin_duration",
 }
 
 PROFILE_KEY_TO_PARAM = {
@@ -850,6 +852,20 @@ def run(
     ] = AffinitySetting.soft_anti,
     volume_type: Annotated[str, typer.Option("--volume-type")] = "__DEFAULT__",
     boot_volume_size: Annotated[int, typer.Option("--boot-volume-size")] = 20,
+    burnin: Annotated[
+        bool,
+        typer.Option(
+            "--burnin",
+            help="Burnin mode: create instances running stress-ng on all CPUs, wait for duration, then delete. Requires a Debian/Ubuntu-based image (uses apt-get).",
+        ),
+    ] = False,
+    burnin_duration: Annotated[
+        int,
+        typer.Option(
+            "--burnin-duration",
+            help="Burnin duration in hours (default: 48, minimum: 1). Controls both wait time and stress-ng timeout.",
+        ),
+    ] = 48,
 ) -> None:
     # Apply profile overrides (CLI flags take precedence over profile values)
     if profile:
@@ -889,6 +905,8 @@ def run(
         affinity = _apply("affinity", affinity)
         volume_type = _apply("volume_type", volume_type)
         boot_volume_size = _apply("boot_volume_size", boot_volume_size)
+        burnin = _apply("burnin", burnin)
+        burnin_duration = _apply("burnin_duration", burnin_duration)
 
         # Convert string values from YAML to enums
         if isinstance(mode, str):
@@ -900,6 +918,18 @@ def run(
     if clean:
         clean_resources(cloud_name, prefix, debug, parallel)
         return
+
+    # Validate burnin options
+    if burnin and burnin_duration < 1:
+        logger.error("--burnin-duration must be at least 1 hour")
+        raise typer.Exit(code=1)
+
+    if (
+        burnin
+        and ctx.get_parameter_source("mode") != click.core.ParameterSource.DEFAULT
+    ):
+        logger.error("--burnin and --mode cannot be used together")
+        raise typer.Exit(code=1)
 
     # Register signal handler for CTRL+C
     signal.signal(signal.SIGINT, signal_handler)
@@ -916,10 +946,22 @@ def run(
     patch_http_connection_pool(maxsize=parallel)
     patch_https_connection_pool(maxsize=parallel)
 
-    user_data = """
-    #cloud-config
-    final_message: "The system is finally up, after $UPTIME seconds"
-    """
+    if burnin:
+        burnin_wait_seconds = burnin_duration * 3600
+        user_data = (
+            "#!/bin/bash\n"
+            "set -e\n"
+            "export DEBIAN_FRONTEND=noninteractive\n"
+            "apt-get update\n"
+            "apt-get install -y stress-ng\n"
+            "NUMBER_OF_CPUS=$(nproc --all)\n"
+            f"/usr/bin/stress-ng --cpu $NUMBER_OF_CPUS --timeout {burnin_wait_seconds}\n"
+        )
+    else:
+        user_data = (
+            "#cloud-config\n"
+            'final_message: "The system is finally up, after $UPTIME seconds"\n'
+        )
 
     b64_user_data = base64.b64encode(user_data.encode("utf-8")).decode("utf-8")
 
@@ -928,7 +970,7 @@ def run(
         "profile": profile or None,
         "number": number,
         "parallel": parallel,
-        "mode": mode.value,
+        "mode": "burnin" if burnin else mode.value,
         "flavor": flavor_name,
         "image": image_name,
         "volume_number": volume_number,
@@ -941,6 +983,8 @@ def run(
         "delete": delete,
         "cleanup": cleanup,
     }
+    if burnin:
+        report.params["burnin_duration"] = f"{burnin_duration}h"
 
     cloud = Cloud(cloud_name, flavor_name, image_name)
 
@@ -990,6 +1034,9 @@ def run(
 
     completed_instances = []
 
+    # In burnin mode, instances must not be deleted during creation
+    burnin_meta = Meta(not no_wait, interval, timeout, False) if burnin else None
+
     def _submit_create(pool, server_index):
         return pool.submit(
             create,
@@ -1004,13 +1051,121 @@ def run(
             server_group,
             volume_type,
             network,
-            meta,
+            burnin_meta if burnin else meta,
             boot_volume_size,
             not no_boot_volume,
             report,
         )
 
-    if mode == ExecutionMode.block:
+    if burnin:
+        # Burnin mode: create all instances, wait for duration, then delete
+        logger.info(
+            f"BURNIN MODE: Creating {number} instance(s) with stress-ng"
+            f" (duration: {burnin_duration}h)"
+        )
+
+        pool = ThreadPoolExecutor(max_workers=parallel)
+        futures_create = []
+        for x in range(number):
+            futures_create.append(_submit_create(pool, x))
+
+        for future in as_completed(futures_create):
+            if shutdown_requested:
+                logger.warning("Shutdown requested - aborting instance creation...")
+                for f in futures_create:
+                    if not f.done():
+                        f.cancel()
+                break
+
+            try:
+                instance = future.result()
+                completed_instances.append(instance)
+                logger.info(
+                    f"Server {instance.server.id} ({instance.server_name}) created and running stress-ng"
+                )
+            except Exception as e:
+                logger.error(f"Error creating server: {e}")
+
+        pool.shutdown(wait=True)
+
+        if completed_instances and not shutdown_requested:
+            logger.info(
+                f"All {len(completed_instances)} instance(s) created."
+                f" Waiting {burnin_duration} hour(s) before cleanup..."
+            )
+
+            wait_start = time.time()
+            while True:
+                now = time.time()
+                elapsed = now - wait_start
+                if elapsed >= burnin_wait_seconds:
+                    break
+                if shutdown_requested:
+                    logger.warning(
+                        "Shutdown requested during burnin wait - proceeding to cleanup..."
+                    )
+                    break
+                remaining = burnin_wait_seconds - elapsed
+                remaining_int = int(remaining)
+                hours, remainder = divmod(remaining_int, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                if hours > 0:
+                    remaining_str = f"{hours}h {minutes}m"
+                elif minutes > 0:
+                    remaining_str = f"{minutes}m {seconds}s"
+                else:
+                    remaining_str = f"{seconds}s"
+                logger.info(f"Burnin in progress - {remaining_str} remaining...")
+                # Log status every minute
+                time.sleep(max(0, min(60, remaining)))
+
+            logger.info("Burnin duration completed.")
+
+        # Cleanup: delete instances unless --no-cleanup is set
+        if cleanup and completed_instances:
+            logger.info("Deleting burnin instances...")
+            delete_meta = Meta(not no_wait, interval, timeout, True)
+            cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
+            futures_delete = []
+            for instance in completed_instances:
+                futures_delete.append(
+                    cleanup_pool.submit(delete_server, instance, delete_meta, report)
+                )
+
+            for f in as_completed(futures_delete):
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.error(f"Error deleting burnin instance: {e}")
+            cleanup_pool.shutdown(wait=True)
+
+            # Ensure all volumes are cleaned up for burnin instances
+            logger.info("Ensuring all burnin volumes are deleted...")
+            for instance in completed_instances:
+                for vol in instance.volumes:
+                    try:
+                        logger.info(f"Checking and deleting volume {vol.id}")
+                        existing_volume = cloud.os_cloud.block_storage.get_volume(
+                            vol.id
+                        )
+                        if existing_volume:
+                            with report.track("volume_delete", f"cleanup-{vol.id}"):
+                                cloud.os_cloud.block_storage.delete_volume(vol)
+                                logger.info(f"Waiting for deletion of volume {vol.id}")
+                                cloud.os_cloud.block_storage.wait_for_delete(
+                                    vol,
+                                    interval=meta.interval,
+                                    wait=meta.timeout,
+                                )
+                    except Exception as e:
+                        logger.error(f"Error deleting volume {vol.id}: {e}")
+
+        elif not cleanup:
+            logger.info(
+                "Skipping cleanup (--no-cleanup set) - instances remain running"
+            )
+
+    elif mode == ExecutionMode.block:
         total_blocks = -(-number // parallel)
         pool = ThreadPoolExecutor(max_workers=parallel)
         for block_idx in range(total_blocks):
@@ -1081,66 +1236,74 @@ def run(
 
         pool.shutdown(wait=True)
 
-    # Always perform cleanup, even if shutdown was requested
-    logger.info("Performing cleanup...")
-    futures_delete = []
-    cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
-    for instance in completed_instances:
-        if cleanup and not delete:
-            futures_delete.append(
-                cleanup_pool.submit(delete_server, instance, meta, report)
-            )
-
-    # Wait for deletion to complete
-    for f in as_completed(futures_delete):
-        try:
-            f.result()
-        except Exception as e:
-            logger.error(f"Error deleting resources: {e}")
-    cleanup_pool.shutdown(wait=True)
-
-    # Ensure all volumes are cleaned up, especially if shutdown was requested
-    if shutdown_requested or (cleanup and not delete):
-        logger.info("Ensuring all volumes are deleted...")
+    # Perform cleanup for non-burnin modes (burnin handles its own cleanup above)
+    if not burnin:
+        logger.info("Performing cleanup...")
+        futures_delete = []
+        cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
         for instance in completed_instances:
-            for vol in instance.volumes:
-                try:
-                    logger.info(f"Checking and deleting volume {vol.id}")
-                    existing_volume = cloud.os_cloud.block_storage.get_volume(vol.id)
-                    if existing_volume:
-                        with report.track("volume_delete", f"cleanup-{vol.id}"):
-                            cloud.os_cloud.block_storage.delete_volume(vol)
-                            logger.info(f"Waiting for deletion of volume {vol.id}")
-                            cloud.os_cloud.block_storage.wait_for_delete(
-                                vol, interval=meta.interval, wait=meta.timeout
-                            )
-                except Exception as e:
-                    logger.error(f"Error deleting volume {vol.id}: {e}")
+            if cleanup and not delete:
+                futures_delete.append(
+                    cleanup_pool.submit(delete_server, instance, meta, report)
+                )
 
-    # Always clean up infrastructure resources
-    if server_group_created:
-        try:
-            logger.info(f"Deleting server group {prefix}")
-            with report.track("server_group_delete", prefix):
-                cloud.os_cloud.compute.delete_server_group(server_group)
-        except Exception as e:
-            logger.error(f"Error deleting server group: {e}")
+        # Wait for deletion to complete
+        for f in as_completed(futures_delete):
+            try:
+                f.result()
+            except Exception as e:
+                logger.error(f"Error deleting resources: {e}")
+        cleanup_pool.shutdown(wait=True)
 
-    if subnet_created:
-        try:
-            logger.info(f"Deleting subnet {prefix}-subnet")
-            with report.track("subnet_delete", subnet_name):
-                cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
-        except Exception as e:
-            logger.error(f"Error deleting subnet: {e}")
+        # Ensure all volumes are cleaned up, especially if shutdown was requested
+        if shutdown_requested or (cleanup and not delete):
+            logger.info("Ensuring all volumes are deleted...")
+            for instance in completed_instances:
+                for vol in instance.volumes:
+                    try:
+                        logger.info(f"Checking and deleting volume {vol.id}")
+                        existing_volume = cloud.os_cloud.block_storage.get_volume(
+                            vol.id
+                        )
+                        if existing_volume:
+                            with report.track("volume_delete", f"cleanup-{vol.id}"):
+                                cloud.os_cloud.block_storage.delete_volume(vol)
+                                logger.info(f"Waiting for deletion of volume {vol.id}")
+                                cloud.os_cloud.block_storage.wait_for_delete(
+                                    vol, interval=meta.interval, wait=meta.timeout
+                                )
+                    except Exception as e:
+                        logger.error(f"Error deleting volume {vol.id}: {e}")
 
-    if network_created:
-        try:
-            logger.info(f"Deleting network {prefix}")
-            with report.track("network_delete", prefix):
-                cloud.os_cloud.network.delete_network(network, ignore_missing=False)
-        except Exception as e:
-            logger.error(f"Error deleting network: {e}")
+    # Clean up infrastructure resources
+    # In burnin mode with --no-cleanup, keep infrastructure for the running instances
+    skip_infra_cleanup = burnin and not cleanup
+    if skip_infra_cleanup:
+        logger.info("Skipping infrastructure cleanup (--no-cleanup set)")
+    else:
+        if server_group_created:
+            try:
+                logger.info(f"Deleting server group {prefix}")
+                with report.track("server_group_delete", prefix):
+                    cloud.os_cloud.compute.delete_server_group(server_group)
+            except Exception as e:
+                logger.error(f"Error deleting server group: {e}")
+
+        if subnet_created:
+            try:
+                logger.info(f"Deleting subnet {prefix}-subnet")
+                with report.track("subnet_delete", subnet_name):
+                    cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
+            except Exception as e:
+                logger.error(f"Error deleting subnet: {e}")
+
+        if network_created:
+            try:
+                logger.info(f"Deleting network {prefix}")
+                with report.track("network_delete", prefix):
+                    cloud.os_cloud.network.delete_network(network, ignore_missing=False)
+            except Exception as e:
+                logger.error(f"Error deleting network: {e}")
 
     report.finalize()
     report.print_report()

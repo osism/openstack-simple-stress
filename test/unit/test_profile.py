@@ -75,7 +75,7 @@ class TestLoadProfile(unittest.TestCase):
                 os.unlink(f.name)
 
     def test_all_builtin_profiles_are_valid(self):
-        for name in ["quick", "stress", "volume", "persistent"]:
+        for name in ["quick", "stress", "volume", "persistent", "burnin"]:
             data = load_profile(name)
             self.assertIsInstance(data, dict)
             unknown = set(data.keys()) - VALID_PROFILE_KEYS

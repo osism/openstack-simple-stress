@@ -340,6 +340,44 @@ class TestCLI(unittest.TestCase):
             mock_volume_match
         )
 
+    def test_no_network_uses_existing(self):
+        mock_network = MagicMock()
+        mock_network.id = "net-existing"
+        self.mock_os_cloud.network.find_network.return_value = mock_network
+
+        mock_subnet = MagicMock()
+        self.mock_os_cloud.network.find_subnet.return_value = mock_subnet
+
+        result = self.runner.invoke(app, ["--no-network"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.network.create_network.assert_not_called()
+        self.mock_os_cloud.network.create_subnet.assert_not_called()
+        self.mock_os_cloud.network.delete_network.assert_not_called()
+        self.mock_os_cloud.network.delete_subnet.assert_not_called()
+
+    def test_no_network_fails_if_network_missing(self):
+        self.mock_os_cloud.network.find_network.return_value = None
+        result = self.runner.invoke(app, ["--no-network"])
+        self.assertNotEqual(result.exit_code, 0)
+
+    def test_no_network_fails_if_subnet_missing(self):
+        mock_network = MagicMock()
+        mock_network.id = "net-existing"
+        self.mock_os_cloud.network.find_network.return_value = mock_network
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        result = self.runner.invoke(app, ["--no-network"])
+        self.assertNotEqual(result.exit_code, 0)
+
+    def test_clean_no_network_skips_network_resources(self):
+        self.mock_os_cloud.compute.servers.return_value = []
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+
+        result = self.runner.invoke(app, ["--clean", "--no-network"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.network.find_subnet.assert_not_called()
+        self.mock_os_cloud.network.find_network.assert_not_called()
+
     def test_clean_with_parallel(self):
         mock_servers = []
         for i in range(3):

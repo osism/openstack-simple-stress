@@ -62,6 +62,7 @@ VALID_PROFILE_KEYS = {
     "affinity",
     "volume_type",
     "boot_volume_size",
+    "no_network",
     "burnin",
     "burnin_duration",
 }
@@ -684,7 +685,11 @@ class ExecutionMode(str, Enum):
 
 
 def clean_resources(
-    cloud_name: str, prefix: str, debug: bool, parallel: int = 1
+    cloud_name: str,
+    prefix: str,
+    debug: bool,
+    parallel: int = 1,
+    no_network: bool = False,
 ) -> None:
     """Find and delete all resources from a previous run with the given prefix."""
 
@@ -718,16 +723,19 @@ def clean_resources(
     if server_group:
         resources.append(("Server Group", server_group.name, server_group.id, ""))
 
-    subnet_name = f"{prefix}-subnet"
-    logger.info(f"Searching for subnet '{subnet_name}'...")
-    subnet = os_cloud.network.find_subnet(subnet_name)
-    if subnet:
-        resources.append(("Subnet", subnet.name, subnet.id, ""))
+    subnet = None
+    network = None
+    if not no_network:
+        subnet_name = f"{prefix}-subnet"
+        logger.info(f"Searching for subnet '{subnet_name}'...")
+        subnet = os_cloud.network.find_subnet(subnet_name)
+        if subnet:
+            resources.append(("Subnet", subnet.name, subnet.id, ""))
 
-    logger.info(f"Searching for network '{prefix}'...")
-    network = os_cloud.network.find_network(prefix)
-    if network:
-        resources.append(("Network", network.name, network.id, ""))
+        logger.info(f"Searching for network '{prefix}'...")
+        network = os_cloud.network.find_network(prefix)
+        if network:
+            resources.append(("Network", network.name, network.id, ""))
 
     if not resources:
         logger.info(f"No resources found with prefix '{prefix}'")
@@ -832,6 +840,7 @@ def run(
     volume: Annotated[bool, typer.Option("--volume")] = True,
     no_volume: Annotated[bool, typer.Option("--no-volume")] = False,
     no_boot_volume: Annotated[bool, typer.Option("--no-boot-volume")] = False,
+    no_network: Annotated[bool, typer.Option("--no-network")] = False,
     no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
     interval: Annotated[int, typer.Option("--interval")] = 10,
     number: Annotated[int, typer.Option("--number")] = 1,
@@ -887,6 +896,7 @@ def run(
         volume = _apply("volume", volume)
         no_volume = _apply("no_volume", no_volume)
         no_boot_volume = _apply("no_boot_volume", no_boot_volume)
+        no_network = _apply("no_network", no_network)
         no_wait = _apply("no_wait", no_wait)
         interval = _apply("interval", interval)
         number = _apply("number", number)
@@ -916,7 +926,7 @@ def run(
 
     # Clean mode: find and delete leftover resources from a previous run
     if clean:
-        clean_resources(cloud_name, prefix, debug, parallel)
+        clean_resources(cloud_name, prefix, debug, parallel, no_network)
         return
 
     # Validate burnin options
@@ -992,6 +1002,9 @@ def run(
     network_created = False
     if network:
         logger.info(f"Using existing network {prefix}")
+    elif no_network:
+        logger.error(f"Network {prefix} not found (required by --no-network)")
+        raise typer.Exit(code=1)
     else:
         logger.info(f"Creating network {prefix}")
         with report.track("network_create", prefix):
@@ -1003,6 +1016,9 @@ def run(
     subnet_created = False
     if subnet:
         logger.info(f"Using existing subnet {subnet_name}")
+    elif no_network:
+        logger.error(f"Subnet {subnet_name} not found (required by --no-network)")
+        raise typer.Exit(code=1)
     else:
         logger.info(f"Creating subnet {subnet_name}")
         try:

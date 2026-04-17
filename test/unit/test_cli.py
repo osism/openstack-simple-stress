@@ -9,7 +9,6 @@ from openstack_simple_stress.main import (
     run,
 )
 
-
 app = typer.Typer()
 app.command()(run)
 

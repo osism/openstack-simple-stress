@@ -8,7 +8,6 @@ from typer.testing import CliRunner
 
 from openstack_simple_stress.main import run
 
-
 app = typer.Typer()
 app.command()(run)
 

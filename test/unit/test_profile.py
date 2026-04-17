@@ -12,7 +12,6 @@ from openstack_simple_stress.main import (
     VALID_PROFILE_KEYS,
 )
 
-
 app = typer.Typer()
 app.command()(run)
 

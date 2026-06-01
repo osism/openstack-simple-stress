@@ -4,7 +4,7 @@ charset-normalizer==3.4.7
 click==8.4.1
 cryptography==46.0.7
 debtcollector==3.0.0
-decorator==5.2.1
+decorator==5.3.1
 dogpile.cache==1.5.0
 idna==3.11
 iso8601==2.1.0

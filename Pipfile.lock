@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "988aa9ab3342347abaae353941025f610dd664ec42e35df0ebf22880321d1a4d"
+            "sha256": "ab6398de83f17278685dbebfd528c74103d4bc01135515b0b3de9f38536654b3"
         },
         "pipfile-spec": 6,
         "requires": {},
@@ -24,11 +24,11 @@
         },
         "certifi": {
             "hashes": [
-                "sha256:3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897",
-                "sha256:69dea482ab64caa7b9f6aba1c6bf48bb6a5448d1c0f1b17ab42ad8c763a5344d"
+                "sha256:024c88eeec92ca068db80f02b8b07c9cef7b9fe261d1d535abfd5abd6f6af432",
+                "sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db"
             ],
             "markers": "python_version >= '3.7'",
-            "version": "==2026.5.20"
+            "version": "==2026.6.17"
         },
         "cffi": {
             "hashes": [
@@ -398,12 +398,12 @@
         },
         "openstacksdk": {
             "hashes": [
-                "sha256:5dde9ae3f1e2411a87ff57b2d78da53fac8eae9e5bac8e5870927cb62ddfc033",
-                "sha256:c75927fb29a9c82d8dd116f16c72093a623d507f9a4aca63f3c26ad8ddf99855"
+                "sha256:3c968f8b97b38b7d73ddb88d16c6a7d80bcc554c5fbfcc12638a7b51bdae144e",
+                "sha256:827e1ade488db6116f59af1da6c97dbdfeeb879d3fc96bca99b19351f15df8ba"
             ],
             "index": "pypi",
-            "markers": "python_version >= '3.10'",
-            "version": "==4.10.0"
+            "markers": "python_version >= '3.11'",
+            "version": "==4.17.0"
         },
         "os-service-types": {
             "hashes": [
@@ -558,13 +558,6 @@
             ],
             "markers": "python_version >= '3.10'",
             "version": "==2.34.2"
-        },
-        "requestsexceptions": {
-            "hashes": [
-                "sha256:3083d872b6e07dc5c323563ef37671d992214ad9a32b0ca4a3d7f5500bf38ce3",
-                "sha256:b095cbc77618f066d459a02b137b020c37da9f46d9b057704019c9f77dba3065"
-            ],
-            "version": "==1.4.0"
         },
         "rich": {
             "hashes": [

@@ -14,7 +14,7 @@ import statistics
 import sys
 import threading
 import time
-from typing import List
+from typing import List, cast
 
 import click
 from keystoneauth1.exceptions.catalog import EndpointNotFound
@@ -388,6 +388,17 @@ class Report:
         console.print()
 
 
+def block_storage(
+    os_cloud: openstack.connection.Connection,
+) -> openstack.block_storage.v3._proxy.Proxy:
+    """Return the block storage proxy of a connection.
+
+    The SDK types this attribute as a union of the v2 and v3 proxy, only the
+    v3 API is used here.
+    """
+    return cast(openstack.block_storage.v3._proxy.Proxy, os_cloud.block_storage)
+
+
 class Cloud:
 
     def __init__(self, cloud_name: str, flavor_name: str, image_name: str):
@@ -443,7 +454,7 @@ class Instance:
         )
         self.server_name = name
 
-        self.volumes: List[openstack.block_storage.v2.volume.Volume] = []
+        self.volumes: List[openstack.block_storage.v3.volume.Volume] = []
 
     def add_volume(
         self,
@@ -546,12 +557,12 @@ def create_volume(
     volume_type: str,
     meta: Meta,
     report: Report | None = None,
-) -> openstack.block_storage.v2.volume.Volume:
+) -> openstack.block_storage.v3.volume.Volume:
     logger.info(f"Creating volume {name}")
     track = report.track if report else _noop_track
 
     with track("volume_create", name):
-        volume = cloud.os_cloud.block_storage.create_volume(
+        volume = block_storage(cloud.os_cloud).create_volume(
             availability_zone=storage_zone,
             name=name,
             size=volume_size,
@@ -559,7 +570,7 @@ def create_volume(
         )
 
         logger.info(f"Waiting for volume {volume.id}")
-        cloud.os_cloud.block_storage.wait_for_status(
+        block_storage(cloud.os_cloud).wait_for_status(
             volume, status="available", interval=meta.interval, wait=meta.timeout
         )
 
@@ -665,9 +676,9 @@ def delete_server(instance: Instance, meta: Meta, report: Report | None = None) 
             f"Deleting volume {volume.id} from server {instance.server.id} ({instance.server_name})"
         )
         with track("volume_delete", f"{instance.server_name}-vol-{volume.id}"):
-            instance.cloud.os_cloud.block_storage.delete_volume(volume)
+            block_storage(instance.cloud.os_cloud).delete_volume(volume)
             logger.info(f"Waiting for deletion of volume {volume.id}")
-            instance.cloud.os_cloud.block_storage.wait_for_delete(
+            block_storage(instance.cloud.os_cloud).wait_for_delete(
                 volume, interval=meta.interval, wait=meta.timeout
             )
 
@@ -709,7 +720,7 @@ def clean_resources(
     logger.info(f"Searching for volumes with prefix '{prefix}'...")
     matching_volumes = []
     try:
-        volumes = list(os_cloud.block_storage.volumes(details=True))
+        volumes = list(block_storage(os_cloud).volumes(details=True))
         matching_volumes = [
             v for v in volumes if v.name and v.name.startswith(f"{prefix}-")
         ]
@@ -778,11 +789,11 @@ def clean_resources(
         except Exception as e:
             logger.error(f"Error deleting server {s.name}: {e}")
 
-    def _delete_volume(v: openstack.block_storage.v2.volume.Volume) -> None:
+    def _delete_volume(v: openstack.block_storage.v3.volume.Volume) -> None:
         try:
             logger.info(f"Deleting volume {v.name} ({v.id})")
-            os_cloud.block_storage.delete_volume(v)
-            os_cloud.block_storage.wait_for_delete(v)
+            block_storage(os_cloud).delete_volume(v)
+            block_storage(os_cloud).wait_for_delete(v)
             logger.info(f"Volume {v.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting volume {v.name}: {e}")
@@ -1161,14 +1172,14 @@ def run(
                 for vol in instance.volumes:
                     try:
                         logger.info(f"Checking and deleting volume {vol.id}")
-                        existing_volume = cloud.os_cloud.block_storage.get_volume(
+                        existing_volume = block_storage(cloud.os_cloud).get_volume(
                             vol.id
                         )
                         if existing_volume:
                             with report.track("volume_delete", f"cleanup-{vol.id}"):
-                                cloud.os_cloud.block_storage.delete_volume(vol)
+                                block_storage(cloud.os_cloud).delete_volume(vol)
                                 logger.info(f"Waiting for deletion of volume {vol.id}")
-                                cloud.os_cloud.block_storage.wait_for_delete(
+                                block_storage(cloud.os_cloud).wait_for_delete(
                                     vol,
                                     interval=meta.interval,
                                     wait=meta.timeout,
@@ -1278,14 +1289,14 @@ def run(
                 for vol in instance.volumes:
                     try:
                         logger.info(f"Checking and deleting volume {vol.id}")
-                        existing_volume = cloud.os_cloud.block_storage.get_volume(
+                        existing_volume = block_storage(cloud.os_cloud).get_volume(
                             vol.id
                         )
                         if existing_volume:
                             with report.track("volume_delete", f"cleanup-{vol.id}"):
-                                cloud.os_cloud.block_storage.delete_volume(vol)
+                                block_storage(cloud.os_cloud).delete_volume(vol)
                                 logger.info(f"Waiting for deletion of volume {vol.id}")
-                                cloud.os_cloud.block_storage.wait_for_delete(
+                                block_storage(cloud.os_cloud).wait_for_delete(
                                     vol, interval=meta.interval, wait=meta.timeout
                                 )
                     except Exception as e:

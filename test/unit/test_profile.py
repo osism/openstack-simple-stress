@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -7,6 +10,7 @@ import typer
 from typer.testing import CliRunner
 
 from openstack_simple_stress.main import (
+    BUILTIN_PROFILES_DIR,
     load_profile,
     run,
     VALID_PROFILE_KEYS,
@@ -14,6 +18,8 @@ from openstack_simple_stress.main import (
 
 app = typer.Typer()
 app.command()(run)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestLoadProfile(unittest.TestCase):
@@ -30,12 +36,12 @@ class TestLoadProfile(unittest.TestCase):
                 os.unlink(f.name)
 
     def test_load_builtin_profile_by_name(self):
-        data = load_profile("quick")
+        data = load_profile("burnin")
         self.assertIn("number", data)
         self.assertIn("parallel", data)
 
     def test_load_builtin_profile_with_extension(self):
-        data = load_profile("quick.yaml")
+        data = load_profile("burnin.yaml")
         self.assertIn("number", data)
 
     def test_load_profile_not_found(self):
@@ -74,13 +80,36 @@ class TestLoadProfile(unittest.TestCase):
                 os.unlink(f.name)
 
     def test_all_builtin_profiles_are_valid(self):
-        for name in ["quick", "stress", "volume", "persistent", "burnin"]:
+        names = [p.stem for p in BUILTIN_PROFILES_DIR.glob("*.yaml")]
+        self.assertIn("burnin", names)
+        for name in names:
             data = load_profile(name)
             self.assertIsInstance(data, dict)
             unknown = set(data.keys()) - VALID_PROFILE_KEYS
             self.assertEqual(
                 unknown, set(), f"Profile '{name}' has unknown keys: {unknown}"
             )
+
+    def test_builtin_profile_resolves_when_run_as_script(self):
+        # tox, the Zuul job and the osism container run main.py as a script,
+        # so the openstack_simple_stress package is not importable there.
+        env = dict(os.environ, OS_CLIENT_CONFIG_FILE=os.devnull)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "openstack_simple_stress/main.py",
+                "--profile=burnin",
+                "--cloud=does-not-exist",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        output = result.stdout + result.stderr
+        self.assertNotIn("ModuleNotFoundError", output)
+        self.assertIn("Loaded profile", output)
 
 
 class TestCLIWithProfile(unittest.TestCase):
@@ -180,10 +209,6 @@ class TestCLIWithProfile(unittest.TestCase):
         result = self.runner.invoke(app, [f"--profile={path}"])
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.assertEqual(mock_add_volume.call_count, 3)
-
-    def test_profile_builtin_quick(self):
-        result = self.runner.invoke(app, ["--profile=quick"])
-        self.assertEqual(result.exit_code, 0, (result, result.stdout))
 
     def test_profile_not_found_exits(self):
         result = self.runner.invoke(app, ["--profile=nonexistent_xyz"])

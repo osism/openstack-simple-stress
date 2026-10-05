@@ -27,9 +27,11 @@
       ansible.builtin.command: openstack --version
       failed_when: false
 
+    # The devstack has no block storage, so the test runs boot from local
+    # disk, which needs a flavor with a root disk.
     - name: Create expected flavor
       # yamllint disable-line rule:line-length
-      ansible.builtin.command: openstack --os-cloud openstack flavor create SCS-1V-2 --id SCS-1V-2 --ram 2048 --vcpus 1
+      ansible.builtin.command: openstack --os-cloud openstack flavor create SCS-1V-2-5 --id SCS-1V-2-5 --ram 2048 --vcpus 1 --disk 5
       args:
         chdir: "{{ zuul_work_dir }}"
 

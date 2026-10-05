@@ -418,6 +418,23 @@ class TestCLI(unittest.TestCase):
         self.mock_os_cloud.network.delete_network.assert_not_called()
         self.mock_os_cloud.compute.delete_server_group.assert_not_called()
 
+    def test_failed_server_create_exits_nonzero(self):
+        self.mock_os_cloud.compute.create_server.side_effect = Exception("boom")
+
+        result = self.runner.invoke(app, ["--number=2"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+
+    def test_failed_infrastructure_cleanup_exits_nonzero(self):
+        self.mock_os_cloud.network.delete_network.side_effect = Exception("409")
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+
+    @patch("openstack_simple_stress.main.shutdown_requested", True)
+    def test_aborted_run_exits_nonzero(self):
+        result = self.runner.invoke(app, ["--number=2"])
+        self.assertEqual(result.exit_code, 130, (result, result.stdout))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,9 +27,31 @@
       ansible.builtin.command: openstack --version
       failed_when: false
 
+    # With the fake virt driver, devstack runs the compute service as host
+    # "<hostname>1", but OVN only binds ports on hosts it has a chassis for,
+    # and its only chassis is "<hostname>". Name the chassis after the fake
+    # compute host so that ports can be bound and servers built.
+    - name: Name the OVN chassis after the fake compute host
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          sudo ovs-vsctl set open . "external-ids:hostname=$(hostname)1"
+          for i in $(seq 1 30); do
+            openstack --os-cloud openstack network agent list \
+              --host "$(hostname)1" -f value -c ID | grep -q . && exit 0
+            sleep 2
+          done
+          echo "OVN chassis for $(hostname)1 did not show up" >&2
+          exit 1
+        chdir: "{{ zuul_work_dir }}"
+        executable: /bin/bash
+      changed_when: true
+
+    # The devstack has no block storage, so the test runs boot from local
+    # disk, which needs a flavor with a root disk.
     - name: Create expected flavor
       # yamllint disable-line rule:line-length
-      ansible.builtin.command: openstack --os-cloud openstack flavor create SCS-1V-2 --id SCS-1V-2 --ram 2048 --vcpus 1
+      ansible.builtin.command: openstack --os-cloud openstack flavor create SCS-1V-2-5 --id SCS-1V-2-5 --ram 2048 --vcpus 1 --disk 5
       args:
         chdir: "{{ zuul_work_dir }}"
 

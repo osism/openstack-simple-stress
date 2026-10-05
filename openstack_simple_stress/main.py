@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from importlib import resources
 import ipaddress
 from pathlib import Path
 
@@ -72,21 +71,24 @@ PROFILE_KEY_TO_PARAM = {
     "image": "image_name",
 }
 
+BUILTIN_PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
+
 
 def _resolve_builtin_profile(name: str) -> Path | None:
-    """Resolve a built-in profile name to its path using importlib.resources."""
+    """Resolve a built-in profile name to its path in the profiles directory.
+
+    The directory is located relative to this file rather than through
+    importlib.resources, because main.py is usually run as a script (tox,
+    Zuul, the osism container), where the package is not importable.
+    """
     candidates = [name]
     if not name.endswith((".yaml", ".yml")):
         candidates.append(f"{name}.yaml")
 
     for candidate in candidates:
-        ref = resources.files("openstack_simple_stress.profiles").joinpath(candidate)
-        try:
-            with resources.as_file(ref) as p:
-                if p.exists():
-                    return p
-        except (FileNotFoundError, TypeError):
-            continue
+        path = BUILTIN_PROFILES_DIR / candidate
+        if path.is_file():
+            return path
     return None
 
 

@@ -235,6 +235,11 @@ class Report:
             self.record(operation, resource_name, time.time() - start, False, str(e))
             raise
 
+    @property
+    def has_errors(self) -> bool:
+        with self._lock:
+            return any(not r.success for r in self._records)
+
     def finalize(self) -> None:
         self.end_time = time.time()
 
@@ -1339,8 +1344,11 @@ def run(
 
     if shutdown_requested:
         logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
-    else:
-        logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
+        raise typer.Exit(code=130)
+    if report.has_errors:
+        logger.error(f"Test completed with errors. Runtime: {runtime:.4f}s")
+        raise typer.Exit(code=1)
+    logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
 
 
 def main() -> None:

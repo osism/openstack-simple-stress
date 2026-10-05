@@ -16,7 +16,6 @@ import threading
 import time
 from typing import List, cast
 
-import click
 from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
@@ -89,6 +88,16 @@ def _resolve_builtin_profile(name: str) -> Path | None:
         except (FileNotFoundError, TypeError):
             continue
     return None
+
+
+def _is_default(ctx: typer.Context, param_name: str) -> bool:
+    """Return True if the parameter was not given on the command line.
+
+    Typer vendors its own copy of click, so its ParameterSource is not the
+    enum from the click package. Compare by member name to work with both.
+    """
+    source = ctx.get_parameter_source(param_name)
+    return source is not None and source.name == "DEFAULT"
 
 
 def load_profile(profile_path: str) -> dict:
@@ -895,8 +904,7 @@ def run(
             if yaml_key not in p:
                 return current
             param_name = PROFILE_KEY_TO_PARAM.get(yaml_key, yaml_key)
-            source = ctx.get_parameter_source(param_name)
-            if source == click.core.ParameterSource.DEFAULT:
+            if _is_default(ctx, param_name):
                 return p[yaml_key]
             return current
 
@@ -945,10 +953,7 @@ def run(
         logger.error("--burnin-duration must be at least 1 hour")
         raise typer.Exit(code=1)
 
-    if (
-        burnin
-        and ctx.get_parameter_source("mode") != click.core.ParameterSource.DEFAULT
-    ):
+    if burnin and not _is_default(ctx, "mode"):
         logger.error("--burnin and --mode cannot be used together")
         raise typer.Exit(code=1)
 

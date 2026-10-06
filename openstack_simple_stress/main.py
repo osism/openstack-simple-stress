@@ -1026,7 +1026,12 @@ def clean_resources(
     resources: list[tuple[str, str, str, str]] = []
 
     logger.info(f"Searching for servers with prefix '{prefix}'...")
-    servers = list(os_cloud.compute.servers(name=f"^{prefix}-"))
+    # Nova evaluates the name filter as a regular expression.
+    servers = [
+        s
+        for s in os_cloud.compute.servers(name=f"^{re.escape(prefix)}-")
+        if s.name.startswith(f"{prefix}-")
+    ]
     for s in servers:
         resources.append(("Server", s.name, s.id, s.status))
 

@@ -3,6 +3,7 @@
     name: openstack-simple-stress-test
     pre-run: playbooks/pre-test.yml
     run: playbooks/test.yml
+    post-run: playbooks/post-test.yml
     timeout: 14400
     roles:
       - zuul: osism/zuul-jobs

@@ -1310,9 +1310,9 @@ def run(
                         logger.error(f"Error deleting volume {vol.id}: {e}")
 
     # Clean up infrastructure resources
-    # In burnin mode with --no-cleanup, keep infrastructure for the running instances
-    skip_infra_cleanup = burnin and not cleanup
-    if skip_infra_cleanup:
+    # With --no-cleanup, servers may still be running on the network, so keep
+    # the infrastructure as well
+    if not cleanup:
         logger.info("Skipping infrastructure cleanup (--no-cleanup set)")
     else:
         if server_group_created:

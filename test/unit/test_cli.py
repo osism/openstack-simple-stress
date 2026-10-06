@@ -522,6 +522,26 @@ class TestCLI(unittest.TestCase):
             server, interval=3, wait=99
         )
 
+    def test_clean_prefix_is_matched_literally(self):
+        own = MagicMock()
+        own.name = "a.b-0"
+        own.id = "srv-own"
+        own.status = "ACTIVE"
+        other = MagicMock()
+        other.name = "aXb-0"
+        other.id = "srv-other"
+        other.status = "ACTIVE"
+        self.mock_os_cloud.compute.servers.return_value = [own, other]
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean", "--yes", "--prefix=a.b"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.servers.assert_called_once_with(name=r"^a\.b-")
+        self.mock_os_cloud.compute.delete_server.assert_called_once_with(own)
+
 
 if __name__ == "__main__":
     unittest.main()

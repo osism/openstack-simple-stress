@@ -1593,32 +1593,6 @@ def run(
                     logger.error(f"Error deleting burnin instance: {e}")
             cleanup_pool.shutdown(wait=True)
 
-            # Ensure all volumes are cleaned up for burnin instances
-            logger.info("Ensuring all burnin volumes are deleted...")
-            for instance in completed_instances:
-                for vol in instance.volumes:
-                    try:
-                        logger.info(f"Checking and deleting volume {vol.id}")
-                        existing_volume = block_storage(cloud.os_cloud).get_volume(
-                            vol.id
-                        )
-                        if existing_volume:
-                            with report.track("volume_delete", f"cleanup-{vol.id}"):
-                                block_storage(cloud.os_cloud).delete_volume(vol)
-                                logger.info(f"Waiting for deletion of volume {vol.id}")
-                                block_storage(cloud.os_cloud).wait_for_delete(
-                                    vol,
-                                    interval=meta.interval,
-                                    wait=meta.timeout,
-                                )
-                    except Exception as e:
-                        logger.error(f"Error deleting volume {vol.id}: {e}")
-
-        elif not cleanup:
-            logger.info(
-                "Skipping cleanup (--no-cleanup set) - instances remain running"
-            )
-
     elif mode == ExecutionMode.block:
         total_blocks = -(-number // parallel)
         pool = ThreadPoolExecutor(max_workers=parallel)
@@ -1710,26 +1684,6 @@ def run(
             except Exception as e:
                 logger.error(f"Error deleting resources: {e}")
         cleanup_pool.shutdown(wait=True)
-
-        # Ensure all volumes are cleaned up, especially if shutdown was requested
-        if shutdown_requested or (cleanup and not delete):
-            logger.info("Ensuring all volumes are deleted...")
-            for instance in completed_instances:
-                for vol in instance.volumes:
-                    try:
-                        logger.info(f"Checking and deleting volume {vol.id}")
-                        existing_volume = block_storage(cloud.os_cloud).get_volume(
-                            vol.id
-                        )
-                        if existing_volume:
-                            with report.track("volume_delete", f"cleanup-{vol.id}"):
-                                block_storage(cloud.os_cloud).delete_volume(vol)
-                                logger.info(f"Waiting for deletion of volume {vol.id}")
-                                block_storage(cloud.os_cloud).wait_for_delete(
-                                    vol, interval=meta.interval, wait=meta.timeout
-                                )
-                    except Exception as e:
-                        logger.error(f"Error deleting volume {vol.id}: {e}")
 
     # Clean up what this run created and still exists. With --no-cleanup,
     # servers may still be running on the network, so keep everything.

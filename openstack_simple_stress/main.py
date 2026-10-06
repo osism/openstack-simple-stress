@@ -684,7 +684,11 @@ def _is_ambiguous(exc: BaseException) -> bool:
 def _reconcile(find: Callable[[], Any], attempts: int = 3, delay: float = 2.0) -> Any:
     """Look for a resource whose create response was lost; None if not found."""
     for attempt in range(attempts):
-        found = find()
+        try:
+            found = find()
+        except Exception as e:
+            logger.warning(f"Lookup after a lost create response failed: {e}")
+            found = None
         if found is not None:
             return found
         if attempt < attempts - 1:
@@ -980,6 +984,17 @@ def _sweep(cloud: Cloud, prefix: str, meta: Meta, report: Report | None = None) 
         logger.error(f"Listing volumes for the final sweep failed: {e}")
         if report:
             report.record("sweep_discovery", "volumes", 0.0, False, str(e))
+    # Networks and subnets carry the mark in their description; this finds
+    # them even if their create response and the reconciliation were lost.
+    try:
+        for n in os_cloud.network.networks(description=_mark_description(meta)):
+            meta.registry.add("network", n.id, n.name, n)
+        for sn in os_cloud.network.subnets(description=_mark_description(meta)):
+            meta.registry.add("subnet", sn.id, sn.name, sn)
+    except Exception as e:
+        logger.error(f"Listing networks for the final sweep failed: {e}")
+        if report:
+            report.record("sweep_discovery", "networks", 0.0, False, str(e))
     for res in meta.registry.items("server"):
         _delete_owned(cloud, res, meta, report)
     for res in meta.registry.items("volume"):
@@ -1446,11 +1461,17 @@ def run(
                     # Nova has no mark for server groups, so a group whose
                     # create response was lost is reported, never adopted.
                     if _is_ambiguous(e):
-                        candidates = [
-                            g
-                            for g in cloud.os_cloud.compute.server_groups()
-                            if g.name == prefix
-                        ]
+                        try:
+                            candidates = [
+                                g
+                                for g in cloud.os_cloud.compute.server_groups()
+                                if g.name == prefix
+                            ]
+                        except Exception as list_error:
+                            logger.warning(
+                                f"Listing server groups failed: {list_error}"
+                            )
+                            candidates = []
                         report.print_resources(
                             "Server group create lost its response; possible "
                             "leftover server groups (remove with --clean "

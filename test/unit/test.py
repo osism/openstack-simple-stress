@@ -229,6 +229,7 @@ class TestCreate(TestBase):
             name="VolumeName",
             size=22,
             volume_type="VolumeType",
+            metadata={"simple-stress-run": ""},
         )
         self.mock_cloud.os_cloud.block_storage.wait_for_status.assert_called_with(
             volume,
@@ -268,6 +269,7 @@ class TestCreate(TestBase):
             networks=[{"uuid": 5678}],
             user_data="UserData",
             scheduler_hints={"group": 1234},
+            metadata={"simple-stress-run": ""},
         )
         self.mock_cloud.os_cloud.compute.wait_for_server.assert_called_with(
             server,
@@ -303,6 +305,7 @@ class TestCreate(TestBase):
             networks=[{"uuid": 5678}],
             user_data="UserData",
             scheduler_hints={"group": 1234},
+            metadata={"simple-stress-run": ""},
         )
         self.mock_cloud.os_cloud.compute.wait_for_server.assert_called_with(
             server,

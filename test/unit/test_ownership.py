@@ -244,3 +244,8 @@ class TestOwnership(unittest.TestCase):
         self.assertEqual(result.exit_code, 1, (result, result.stdout))
         self.os.compute.delete_server_group.assert_not_called()
         self.assertIn("possible leftover", result.stdout)
+
+    def test_no_delete_run_deletes_each_volume_once(self):
+        result = self.runner.invoke(app, ["--no-delete"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.assertEqual(self.os.block_storage.delete_volume.call_count, 1)

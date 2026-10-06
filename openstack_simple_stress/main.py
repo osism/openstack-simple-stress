@@ -15,9 +15,10 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, List, cast
+from typing import Any, Callable, Iterable, List, cast
 
 from keystoneauth1.exceptions import ClientException
+from keystoneauth1.exceptions import ConnectionError as KeystoneConnectionError
 from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
@@ -670,6 +671,65 @@ def create(
     return instance
 
 
+def _is_ambiguous(exc: BaseException) -> bool:
+    """True if the request may have been executed although no usable response came.
+
+    Connection errors and 5xx answers are ambiguous; a 4xx is a clean rejection.
+    """
+    if isinstance(exc, openstack.exceptions.HttpException):
+        return exc.status_code is not None and exc.status_code >= 500
+    return isinstance(exc, KeystoneConnectionError)
+
+
+def _reconcile(find: Callable[[], Any], attempts: int = 3, delay: float = 2.0) -> Any:
+    """Look for a resource whose create response was lost; None if not found."""
+    for attempt in range(attempts):
+        found = find()
+        if found is not None:
+            return found
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return None
+
+
+def _create_owned(
+    kind: str,
+    name: str,
+    meta: Meta,
+    create_call: Callable[[], Any],
+    find_call: Callable[[], Any] | None,
+) -> Any:
+    """Create a resource and register it; reconcile if the response was lost."""
+    try:
+        obj = create_call()
+    except Exception as e:
+        if _is_ambiguous(e) and find_call is not None:
+            found = _reconcile(find_call)
+            if found is not None:
+                meta.registry.add(kind, found.id, name, found)
+                logger.warning(
+                    f"Create of {kind} {name} lost its response, but the {kind} "
+                    f"exists ({found.id}); it will be deleted"
+                )
+        raise
+    meta.registry.add(kind, obj.id, name, obj)
+    return obj
+
+
+def _first(iterable: Iterable[Any]) -> Any:
+    return next(iter(iterable), None)
+
+
+def _find_marked_server(cloud: Cloud, name: str, meta: Meta) -> Any:
+    """The server with exactly this name and this run's mark, or None."""
+    # Nova evaluates the name filter as a regular expression.
+    return _first(
+        s
+        for s in cloud.os_cloud.compute.servers(name=f"^{re.escape(name)}$")
+        if s.name == name and (s.metadata or {}).get(RUN_MARK_KEY) == meta.run_id
+    )
+
+
 def create_volume(
     cloud: Cloud,
     name: str,
@@ -683,14 +743,23 @@ def create_volume(
     track = report.track if report else _noop_track
 
     with track("volume_create", name):
-        volume = block_storage(cloud.os_cloud).create_volume(
-            availability_zone=storage_zone,
-            name=name,
-            size=volume_size,
-            volume_type=volume_type,
-            metadata=_mark(meta),
+        volume = _create_owned(
+            "volume",
+            name,
+            meta,
+            lambda: block_storage(cloud.os_cloud).create_volume(
+                availability_zone=storage_zone,
+                name=name,
+                size=volume_size,
+                volume_type=volume_type,
+                metadata=_mark(meta),
+            ),
+            lambda: _first(
+                v
+                for v in block_storage(cloud.os_cloud).volumes(details=True, name=name)
+                if (v.metadata or {}).get(RUN_MARK_KEY) == meta.run_id
+            ),
         )
-        meta.registry.add("volume", volume.id, name, volume)
 
         logger.info(f"Waiting for volume {volume.id}")
         block_storage(cloud.os_cloud).wait_for_status(
@@ -738,32 +807,42 @@ def create_server(
             block_device_mapping[0]["volume_type"] = volume_type
 
         with track("server_create", name):
-            server = cloud.os_cloud.compute.create_server(
-                availability_zone=compute_zone,
-                name=name,
-                flavor_id=cloud.os_flavor.id,
-                networks=[{"uuid": network.id}],
-                user_data=user_data,
-                scheduler_hints={"group": server_group.id},
-                metadata=_mark(meta),
-                block_device_mapping=block_device_mapping,
+            server = _create_owned(
+                "server",
+                name,
+                meta,
+                lambda: cloud.os_cloud.compute.create_server(
+                    availability_zone=compute_zone,
+                    name=name,
+                    flavor_id=cloud.os_flavor.id,
+                    networks=[{"uuid": network.id}],
+                    user_data=user_data,
+                    scheduler_hints={"group": server_group.id},
+                    metadata=_mark(meta),
+                    block_device_mapping=block_device_mapping,
+                ),
+                lambda: _find_marked_server(cloud, name, meta),
             )
     else:
         logger.info(f"Creating server {name} with boot from local storage")
 
         with track("server_create", name):
-            server = cloud.os_cloud.compute.create_server(
-                availability_zone=compute_zone,
-                name=name,
-                flavor_id=cloud.os_flavor.id,
-                image_id=cloud.os_image.id,
-                networks=[{"uuid": network.id}],
-                user_data=user_data,
-                scheduler_hints={"group": server_group.id},
-                metadata=_mark(meta),
+            server = _create_owned(
+                "server",
+                name,
+                meta,
+                lambda: cloud.os_cloud.compute.create_server(
+                    availability_zone=compute_zone,
+                    name=name,
+                    flavor_id=cloud.os_flavor.id,
+                    image_id=cloud.os_image.id,
+                    networks=[{"uuid": network.id}],
+                    user_data=user_data,
+                    scheduler_hints={"group": server_group.id},
+                    metadata=_mark(meta),
+                ),
+                lambda: _find_marked_server(cloud, name, meta),
             )
-
-    meta.registry.add("server", server.id, name, server)
 
     logger.info(f"Waiting for server {server.id} ({name})")
     with track("server_wait_active", name):
@@ -1298,10 +1377,19 @@ def run(
         else:
             logger.info(f"Creating network {prefix}")
             with report.track("network_create", prefix):
-                network = cloud.os_cloud.network.create_network(
-                    name=prefix, description=_mark_description(meta)
+                network = _create_owned(
+                    "network",
+                    prefix,
+                    meta,
+                    lambda: cloud.os_cloud.network.create_network(
+                        name=prefix, description=_mark_description(meta)
+                    ),
+                    lambda: _first(
+                        cloud.os_cloud.network.networks(
+                            name=prefix, description=_mark_description(meta)
+                        )
+                    ),
                 )
-            meta.registry.add("network", network.id, prefix, network)
 
         subnet = cloud.os_cloud.network.find_subnet(subnet_name)
         if subnet:
@@ -1317,15 +1405,26 @@ def run(
                 logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
                 subnet_cidr = "10.100.0.0/16"
 
+            network_id = network.id
+            cidr = subnet_cidr
             with report.track("subnet_create", subnet_name):
-                subnet = cloud.os_cloud.network.create_subnet(
-                    name=subnet_name,
-                    network_id=network.id,
-                    ip_version="4",
-                    cidr=subnet_cidr,
-                    description=_mark_description(meta),
+                subnet = _create_owned(
+                    "subnet",
+                    subnet_name,
+                    meta,
+                    lambda: cloud.os_cloud.network.create_subnet(
+                        name=subnet_name,
+                        network_id=network_id,
+                        ip_version="4",
+                        cidr=cidr,
+                        description=_mark_description(meta),
+                    ),
+                    lambda: _first(
+                        cloud.os_cloud.network.subnets(
+                            name=subnet_name, description=_mark_description(meta)
+                        )
+                    ),
                 )
-            meta.registry.add("subnet", subnet.id, subnet_name, subnet)
 
         server_group = cloud.os_cloud.compute.find_server_group(prefix)
         if server_group:
@@ -1333,10 +1432,35 @@ def run(
         else:
             logger.info(f"Creating server group {prefix}")
             with report.track("server_group_create", prefix):
-                server_group = cloud.os_cloud.compute.create_server_group(
-                    name=prefix, policies=[affinity.value]
-                )
-            meta.registry.add("server_group", server_group.id, prefix, server_group)
+                try:
+                    server_group = _create_owned(
+                        "server_group",
+                        prefix,
+                        meta,
+                        lambda: cloud.os_cloud.compute.create_server_group(
+                            name=prefix, policies=[affinity.value]
+                        ),
+                        None,
+                    )
+                except Exception as e:
+                    # Nova has no mark for server groups, so a group whose
+                    # create response was lost is reported, never adopted.
+                    if _is_ambiguous(e):
+                        candidates = [
+                            g
+                            for g in cloud.os_cloud.compute.server_groups()
+                            if g.name == prefix
+                        ]
+                        report.print_resources(
+                            "Server group create lost its response; possible "
+                            "leftover server groups (remove with --clean "
+                            f"--prefix {prefix})",
+                            [
+                                OwnedResource("server_group", g.id, g.name, g)
+                                for g in candidates
+                            ],
+                        )
+                    raise
     except (openstack.exceptions.SDKException, ClientException) as e:
         logger.error(f"Setup failed: {e}")
         setup_ok = False

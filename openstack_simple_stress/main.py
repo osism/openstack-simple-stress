@@ -14,6 +14,7 @@ import statistics
 import sys
 import threading
 import time
+import uuid
 from typing import List, cast
 
 from keystoneauth1.exceptions.catalog import EndpointNotFound
@@ -38,6 +39,8 @@ shutdown_requested = False
 EXIT_FAILED = 1
 EXIT_PREFLIGHT = 2
 EXIT_ABORTED = 130
+
+RUN_MARK_KEY = "simple-stress-run"
 
 VALID_PROFILE_KEYS = {
     "clean",
@@ -198,11 +201,29 @@ def patch_https_connection_pool(**constructor_kwargs) -> None:
 
 class Meta:
 
-    def __init__(self, wait: bool, interval: int, timeout: int, delete: bool):
+    def __init__(
+        self,
+        wait: bool,
+        interval: int,
+        timeout: int,
+        delete: bool,
+        run_id: str = "",
+    ):
         self.wait = wait
         self.interval = interval
         self.timeout = timeout
         self.delete = delete
+        self.run_id = run_id
+
+
+def _mark(meta: Meta) -> dict[str, str]:
+    """Ownership mark for servers and volumes (set in the create request)."""
+    return {RUN_MARK_KEY: meta.run_id}
+
+
+def _mark_description(meta: Meta) -> str:
+    """Ownership mark for networks and subnets (set in the create request)."""
+    return f"{RUN_MARK_KEY}={meta.run_id}"
 
 
 @dataclass
@@ -622,6 +643,7 @@ def create_volume(
             name=name,
             size=volume_size,
             volume_type=volume_type,
+            metadata=_mark(meta),
         )
 
         logger.info(f"Waiting for volume {volume.id}")
@@ -677,6 +699,7 @@ def create_server(
                 networks=[{"uuid": network.id}],
                 user_data=user_data,
                 scheduler_hints={"group": server_group.id},
+                metadata=_mark(meta),
                 block_device_mapping=block_device_mapping,
             )
     else:
@@ -691,6 +714,7 @@ def create_server(
                 networks=[{"uuid": network.id}],
                 user_data=user_data,
                 scheduler_hints={"group": server_group.id},
+                metadata=_mark(meta),
             )
 
     logger.info(f"Waiting for server {server.id} ({name})")
@@ -1061,7 +1085,9 @@ def run(
     signal.signal(signal.SIGINT, signal_handler)
     delete = not no_delete
     cleanup = not no_cleanup
-    meta = Meta(not no_wait, interval, timeout, delete)
+    run_id = str(uuid.uuid4())
+    logger.info(f"Run ID: {run_id}")
+    meta = Meta(not no_wait, interval, timeout, delete, run_id=run_id)
 
     # Handle volume parameters - --no-volume overrides --volume
     if no_volume:
@@ -1108,6 +1134,7 @@ def run(
         "affinity": affinity.value,
         "delete": delete,
         "cleanup": cleanup,
+        "run_id": run_id,
     }
     if burnin:
         report.params["burnin_duration"] = f"{burnin_duration}h"
@@ -1129,7 +1156,9 @@ def run(
     else:
         logger.info(f"Creating network {prefix}")
         with report.track("network_create", prefix):
-            network = cloud.os_cloud.network.create_network(name=prefix)
+            network = cloud.os_cloud.network.create_network(
+                name=prefix, description=_mark_description(meta)
+            )
         network_created = True
 
     subnet_name = f"{prefix}-subnet"
@@ -1154,6 +1183,7 @@ def run(
                 network_id=network.id,
                 ip_version="4",
                 cidr=subnet_cidr,
+                description=_mark_description(meta),
             )
         subnet_created = True
 
@@ -1172,7 +1202,9 @@ def run(
     completed_instances = []
 
     # In burnin mode, instances must not be deleted during creation
-    burnin_meta = Meta(not no_wait, interval, timeout, False) if burnin else None
+    burnin_meta = (
+        Meta(not no_wait, interval, timeout, False, run_id=run_id) if burnin else None
+    )
 
     def _submit_create(pool, server_index):
         return pool.submit(
@@ -1261,7 +1293,7 @@ def run(
         # Cleanup: delete instances unless --no-cleanup is set
         if cleanup and completed_instances:
             logger.info("Deleting burnin instances...")
-            delete_meta = Meta(not no_wait, interval, timeout, True)
+            delete_meta = Meta(not no_wait, interval, timeout, True, run_id=run_id)
             cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
             futures_delete = []
             for instance in completed_instances:

@@ -127,6 +127,7 @@ class TestCLI(unittest.TestCase):
             user_data=ANY,
             scheduler_hints=ANY,
             block_device_mapping=ANY,
+            metadata=ANY,
         )
 
     def test_cli_10(self):
@@ -169,12 +170,14 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_os_cloud.network.create_network.assert_called_once_with(
             name="simple-stress",
+            description=ANY,
         )
         self.mock_os_cloud.network.create_subnet.assert_called_once_with(
             name="simple-stress-subnet",
             network_id=1234,
             ip_version="4",
             cidr="10.100.1.0/24",
+            description=ANY,
         )
         self.mock_os_cloud.network.delete_subnet.assert_called_with(
             mock_subnet, ignore_missing=False
@@ -193,6 +196,7 @@ class TestCLI(unittest.TestCase):
             network_id=ANY,
             ip_version=ANY,
             cidr="10.100.0.0/16",
+            description=ANY,
         )
 
     def test_default_mode_is_rolling(self):
@@ -541,6 +545,21 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_os_cloud.compute.servers.assert_called_once_with(name=r"^a\.b-")
         self.mock_os_cloud.compute.delete_server.assert_called_once_with(own)
+
+    @patch("openstack_simple_stress.main.uuid")
+    def test_create_requests_carry_the_run_mark(self, mock_uuid):
+        mock_uuid.uuid4.return_value = "run-1"
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        _, kwargs = self.mock_os_cloud.compute.create_server.call_args
+        self.assertEqual(kwargs["metadata"], {"simple-stress-run": "run-1"})
+        _, kwargs = self.mock_os_cloud.block_storage.create_volume.call_args
+        self.assertEqual(kwargs["metadata"], {"simple-stress-run": "run-1"})
+        _, kwargs = self.mock_os_cloud.network.create_network.call_args
+        self.assertEqual(kwargs["description"], "simple-stress-run=run-1")
+        _, kwargs = self.mock_os_cloud.network.create_subnet.call_args
+        self.assertEqual(kwargs["description"], "simple-stress-run=run-1")
 
 
 if __name__ == "__main__":

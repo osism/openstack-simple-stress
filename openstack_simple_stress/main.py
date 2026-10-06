@@ -488,6 +488,7 @@ class Instance:
         report: Report | None = None,
     ):
         self.cloud = cloud
+        self.meta = meta
 
         self.server = create_server(
             self.cloud,
@@ -534,7 +535,9 @@ class Instance:
                 f"Attaching volume {volume.id} to server {self.server.id} ({self.server_name})"
             )
             with track("volume_attach", f"{self.server_name}-vol-{volume.id}"):
-                self.cloud.os_cloud.attach_volume(self.server, volume)
+                self.cloud.os_cloud.attach_volume(
+                    self.server, volume, timeout=self.meta.timeout
+                )
 
             logger.info(f"Refreshing details of {self.server.id} ({self.server_name})")
             self.server = self.cloud.os_cloud.compute.get_server(self.server.id)
@@ -698,12 +701,18 @@ def create_server(
     if meta.wait:
         logger.info(f"Waiting for boot of {server.id} ({name})")
         with track("server_wait_boot", name):
+            deadline = time.time() + meta.timeout
             while True:
                 console = cloud.os_cloud.compute.get_server_console_output(server)
                 if "Failed to run module scripts-user" in str(console):
                     logger.error(f"Failed tests for {server.id} ({name})")
                 if "The system is finally up" in str(console):
                     break
+                if time.time() >= deadline:
+                    raise TimeoutError(
+                        f"Server {server.id} ({name}) did not finish booting "
+                        f"within {meta.timeout}s"
+                    )
                 time.sleep(1.0)
 
     return server
@@ -904,7 +913,7 @@ def run(
     no_boot_volume: Annotated[bool, typer.Option("--no-boot-volume")] = False,
     no_network: Annotated[bool, typer.Option("--no-network")] = False,
     no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
-    interval: Annotated[int, typer.Option("--interval")] = 10,
+    interval: Annotated[int, typer.Option("--interval")] = 2,
     number: Annotated[int, typer.Option("--number")] = 1,
     parallel: Annotated[int, typer.Option("--parallel")] = 1,
     mode: Annotated[ExecutionMode, typer.Option("--mode")] = ExecutionMode.rolling,

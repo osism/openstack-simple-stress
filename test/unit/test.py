@@ -151,7 +151,7 @@ class TestInstance(TestBase):
 
         self.assertEqual(self.mock_cloud.os_cloud.attach_volume.call_count, 2)
         self.mock_cloud.os_cloud.attach_volume.assert_called_with(
-            instance.server, mock_create_volume.return_value
+            instance.server, mock_create_volume.return_value, timeout=MOCK_META.timeout
         )
         self.assertEqual(instance.server.id, 8)
 

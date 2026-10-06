@@ -435,6 +435,30 @@ class TestCLI(unittest.TestCase):
         result = self.runner.invoke(app, ["--number=2"])
         self.assertEqual(result.exit_code, 130, (result, result.stdout))
 
+    @patch("openstack_simple_stress.main.time")
+    def test_boot_wait_is_bounded_by_timeout(self, mock_time):
+        clock = iter(range(0, 10**7, 100))
+        mock_time.time.side_effect = lambda: next(clock)
+        self.mock_os_cloud.compute.get_server_console_output.return_value = (
+            "still booting"
+        )
+
+        result = self.runner.invoke(app, ["--timeout=600"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.assertIn("did not finish booting", result.stdout)
+
+    def test_default_interval_is_2_seconds(self):
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        _, kwargs = self.mock_os_cloud.compute.wait_for_server.call_args
+        self.assertEqual(kwargs["interval"], 2)
+
+    def test_volume_attach_wait_is_bounded_by_timeout(self):
+        result = self.runner.invoke(app, ["--timeout=321"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        _, kwargs = self.mock_os_cloud.attach_volume.call_args
+        self.assertEqual(kwargs["timeout"], 321)
+
 
 if __name__ == "__main__":
     unittest.main()

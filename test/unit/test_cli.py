@@ -407,6 +407,17 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(self.mock_os_cloud.block_storage.delete_volume.call_count, 2)
         self.assertEqual(self.mock_os_cloud.block_storage.wait_for_delete.call_count, 2)
 
+    @patch("openstack_simple_stress.main.delete_server")
+    def test_retained_resources_keep_infrastructure(self, mock_delete_server):
+        # Servers kept with --no-delete --no-cleanup still use the network,
+        # so deleting it would fail; keeping resources is not an error.
+        result = self.runner.invoke(app, ["--no-delete", "--no-cleanup"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        mock_delete_server.assert_not_called()
+        self.mock_os_cloud.network.delete_subnet.assert_not_called()
+        self.mock_os_cloud.network.delete_network.assert_not_called()
+        self.mock_os_cloud.compute.delete_server_group.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

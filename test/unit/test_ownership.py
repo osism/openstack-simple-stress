@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from keystoneauth1.exceptions import ConnectFailure
 import openstack.exceptions
 import typer
 from typer.testing import CliRunner
@@ -193,3 +194,53 @@ class TestOwnership(unittest.TestCase):
         self.assertEqual(result.exit_code, 130, (result, result.stdout))
         self.os.network.delete_subnet.assert_called_once()
         self.os.network.delete_network.assert_called_once()
+
+    @patch("openstack_simple_stress.main.time.sleep")
+    def test_lost_server_create_response_is_reconciled(self, _):
+        accepted = _server("simple-stress-0", "run-1")
+        self.os.compute.create_server.side_effect = ConnectFailure("aborted")
+        self.os.compute.servers.side_effect = lambda **kw: (
+            [accepted] if kw.get("name") == r"^simple\-stress\-0$" else []
+        )
+
+        result = self.runner.invoke(app, ["--no-volume"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.os.compute.delete_server.assert_any_call(accepted)
+
+    @patch("openstack_simple_stress.main.time.sleep")
+    def test_lost_network_create_response_is_reconciled(self, _):
+        accepted = MagicMock()
+        self.os.network.create_network.side_effect = ConnectFailure("aborted")
+        self.os.network.networks.return_value = [accepted]
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.os.network.networks.assert_any_call(
+            name="simple-stress", description="simple-stress-run=run-1"
+        )
+        self.os.network.delete_network.assert_called_once_with(
+            accepted, ignore_missing=False
+        )
+
+    def test_rejected_create_is_not_reconciled(self):
+        self.os.compute.create_server.side_effect = openstack.exceptions.HttpException(
+            message="quota", http_status=403
+        )
+
+        result = self.runner.invoke(app, ["--no-volume"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        for call in self.os.compute.servers.call_args_list:
+            self.assertNotEqual(call.kwargs.get("name"), r"^simple\-stress\-0$")
+        self.os.compute.delete_server.assert_not_called()
+
+    @patch("openstack_simple_stress.main.time.sleep")
+    def test_lost_server_group_create_is_reported_not_adopted(self, _):
+        candidate = MagicMock()
+        candidate.name = "simple-stress"
+        self.os.compute.create_server_group.side_effect = ConnectFailure("aborted")
+        self.os.compute.server_groups.return_value = [candidate]
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.os.compute.delete_server_group.assert_not_called()
+        self.assertIn("possible leftover", result.stdout)

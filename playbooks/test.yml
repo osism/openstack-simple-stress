@@ -19,4 +19,4 @@
           --parallel 2
     - role: tox
       vars:
-        tox_extra_args: -- --cloud openstack --clean
+        tox_extra_args: -- --cloud openstack --clean --yes

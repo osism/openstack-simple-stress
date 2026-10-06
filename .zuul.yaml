@@ -22,6 +22,10 @@
         - openstack-simple-stress-test
         - python-black:
             nodeset: ubuntu-noble
+        - tox:
+            nodeset: ubuntu-noble
+            vars:
+              tox_envlist: test
         - yamllint:
             nodeset: ubuntu-noble
     periodic-daily:
@@ -33,5 +37,9 @@
         - openstack-simple-stress-test
         - python-black:
             nodeset: ubuntu-noble
+        - tox:
+            nodeset: ubuntu-noble
+            vars:
+              tox_envlist: test
         - yamllint:
             nodeset: ubuntu-noble

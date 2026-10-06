@@ -755,14 +755,24 @@ class ExecutionMode(str, Enum):
     block = "block"
 
 
+def _stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
 def clean_resources(
     cloud_name: str,
     prefix: str,
     debug: bool,
     parallel: int = 1,
     no_network: bool = False,
-) -> None:
-    """Find and delete all resources from a previous run with the given prefix."""
+    assume_yes: bool = False,
+    interval: int = 2,
+    timeout: int = 600,
+) -> bool:
+    """Find and delete all resources from a previous run with the given prefix.
+
+    Returns False if deletion was refused or anything could not be deleted.
+    """
 
     openstack.enable_logging(debug=debug, http_debug=debug)
     os_cloud = openstack.connect(cloud=cloud_name)
@@ -786,7 +796,7 @@ def clean_resources(
         ]
         for v in matching_volumes:
             resources.append(("Volume", v.name, v.id, v.status))
-    except EndpointNotFound:
+    except (EndpointNotFound, openstack.exceptions.ServiceDisabledException):
         logger.warning("Block storage service not available, skipping volume cleanup")
 
     logger.info(f"Searching for server group '{prefix}'...")
@@ -810,7 +820,7 @@ def clean_resources(
 
     if not resources:
         logger.info(f"No resources found with prefix '{prefix}'")
-        return
+        return True
 
     # Display found resources
     table = Table(title=f"Resources found with prefix '{prefix}'")
@@ -826,49 +836,61 @@ def clean_resources(
     console.print(table)
     console.print()
 
-    # Ask for confirmation
-    try:
-        response = (
-            input(f"Delete all {len(resources)} resource(s)? (y/N): ").strip().lower()
-        )
-    except (EOFError, KeyboardInterrupt):
-        logger.info("\nAborted.")
-        return
-
-    if response not in ["y", "yes"]:
-        logger.info("Aborted.")
-        return
+    if not assume_yes:
+        if not _stdin_is_tty():
+            logger.error(
+                "Not deleting: no terminal to confirm on. "
+                "Run again with --yes to delete without confirmation."
+            )
+            return False
+        try:
+            response = (
+                input(f"Delete all {len(resources)} resource(s)? (y/N): ")
+                .strip()
+                .lower()
+            )
+        except (EOFError, KeyboardInterrupt):
+            logger.info("\nAborted.")
+            return True
+        if response not in ["y", "yes"]:
+            logger.info("Aborted.")
+            return True
 
     # Delete in order: servers, volumes, server group, subnet, network
-    def _delete_server(s: openstack.compute.v2.server.Server) -> None:
+    def _delete_server(s: openstack.compute.v2.server.Server) -> bool:
         try:
             logger.info(f"Deleting server {s.name} ({s.id})")
             os_cloud.compute.delete_server(s)
-            os_cloud.compute.wait_for_delete(s)
+            os_cloud.compute.wait_for_delete(s, interval=interval, wait=timeout)
             logger.info(f"Server {s.name} deleted")
+            return True
         except Exception as e:
             logger.error(f"Error deleting server {s.name}: {e}")
+            return False
 
-    def _delete_volume(v: openstack.block_storage.v3.volume.Volume) -> None:
+    def _delete_volume(v: openstack.block_storage.v3.volume.Volume) -> bool:
         try:
             logger.info(f"Deleting volume {v.name} ({v.id})")
             block_storage(os_cloud).delete_volume(v)
-            block_storage(os_cloud).wait_for_delete(v)
+            block_storage(os_cloud).wait_for_delete(v, interval=interval, wait=timeout)
             logger.info(f"Volume {v.name} deleted")
+            return True
         except Exception as e:
             logger.error(f"Error deleting volume {v.name}: {e}")
+            return False
 
     # Delete servers first; volumes may still be attached and cannot be
     # removed until their server is gone.
+    ok = True
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [pool.submit(_delete_server, s) for s in servers]
         for future in as_completed(futures):
-            future.result()
+            ok = future.result() and ok
 
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [pool.submit(_delete_volume, v) for v in matching_volumes]
         for future in as_completed(futures):
-            future.result()
+            ok = future.result() and ok
 
     if server_group:
         try:
@@ -879,6 +901,7 @@ def clean_resources(
             logger.info(f"Server group {server_group.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting server group: {e}")
+            ok = False
 
     if subnet:
         try:
@@ -887,6 +910,7 @@ def clean_resources(
             logger.info(f"Subnet {subnet.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting subnet: {e}")
+            ok = False
 
     if network:
         try:
@@ -895,8 +919,13 @@ def clean_resources(
             logger.info(f"Network {network.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting network: {e}")
+            ok = False
 
-    logger.info("Cleanup completed")
+    if ok:
+        logger.info("Cleanup completed")
+    else:
+        logger.error("Cleanup incomplete; see the errors above")
+    return ok
 
 
 def run(
@@ -905,6 +934,10 @@ def run(
         str, typer.Option("--profile", help="Path to a YAML profile file")
     ] = "",
     clean: Annotated[bool, typer.Option("--clean")] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Do not ask for confirmation in --clean mode"),
+    ] = False,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
     no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
@@ -996,7 +1029,17 @@ def run(
 
     # Clean mode: find and delete leftover resources from a previous run
     if clean:
-        clean_resources(cloud_name, prefix, debug, parallel, no_network)
+        if not clean_resources(
+            cloud_name,
+            prefix,
+            debug,
+            parallel,
+            no_network,
+            assume_yes=yes,
+            interval=interval,
+            timeout=timeout,
+        ):
+            raise typer.Exit(code=EXIT_FAILED)
         return
 
     # Validate burnin options

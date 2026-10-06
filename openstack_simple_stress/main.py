@@ -34,6 +34,10 @@ logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
 
 shutdown_requested = False
 
+EXIT_FAILED = 1
+EXIT_PREFLIGHT = 2
+EXIT_ABORTED = 130
+
 VALID_PROFILE_KEYS = {
     "clean",
     "no_cleanup",
@@ -415,24 +419,55 @@ def block_storage(
     return cast(openstack.block_storage.v3._proxy.Proxy, os_cloud.block_storage)
 
 
+class PreflightError(Exception):
+    """A check before creating anything failed; the run exits with code 2."""
+
+
 class Cloud:
 
     def __init__(self, cloud_name: str, flavor_name: str, image_name: str):
         self.os_cloud = openstack.connect(cloud=cloud_name)
 
         logger.info(f"Checking flavor {flavor_name}")
-        self.os_flavor = self.os_cloud.get_flavor(flavor_name)
-        if self.os_flavor is None:
-            logger.error(f"Flavor '{flavor_name}' not found")
-            sys.exit(1)
+        flavor = self.os_cloud.get_flavor(flavor_name)
+        if flavor is None:
+            raise PreflightError(f"Flavor '{flavor_name}' not found")
+        self.os_flavor = flavor
         logger.info(f"flavor.id = {self.os_flavor.id}")
 
         logger.info(f"Checking image {image_name}")
-        self.os_image = self.os_cloud.get_image(image_name)
-        if self.os_image is None:
-            logger.error(f"Image '{image_name}' not found")
-            sys.exit(1)
+        image = self.os_cloud.get_image(image_name)
+        if image is None:
+            raise PreflightError(f"Image '{image_name}' not found")
+        self.os_image = image
         logger.info(f"image.id = {self.os_image.id}")
+
+
+def preflight(cloud: Cloud, *, boot_from_volume: bool, volumes: bool) -> None:
+    """Fail before creating anything if the run cannot work.
+
+    Raises PreflightError with a message for the operator.
+    """
+    flavor, image = cloud.os_flavor, cloud.os_image
+    if not boot_from_volume:
+        if not flavor.disk:
+            raise PreflightError(
+                f"Flavor '{flavor.name}' has no root disk, which local boot "
+                "(--no-boot-volume) needs; use a flavor with a disk"
+            )
+        min_disk = image.min_disk or 0
+        if flavor.disk < min_disk:
+            raise PreflightError(
+                f"Flavor '{flavor.name}' disk ({flavor.disk} GB) is smaller than "
+                f"the min_disk of image '{image.name}' ({min_disk} GB)"
+            )
+    if (boot_from_volume or volumes) and not cloud.os_cloud.has_service(
+        "block-storage"
+    ):
+        raise PreflightError(
+            "The cloud has no block storage service; "
+            "use --no-volume --no-boot-volume"
+        )
 
 
 class Instance:
@@ -1019,7 +1054,12 @@ def run(
     if burnin:
         report.params["burnin_duration"] = f"{burnin_duration}h"
 
-    cloud = Cloud(cloud_name, flavor_name, image_name)
+    try:
+        cloud = Cloud(cloud_name, flavor_name, image_name)
+        preflight(cloud, boot_from_volume=not no_boot_volume, volumes=volume)
+    except PreflightError as e:
+        logger.error(str(e))
+        raise typer.Exit(code=EXIT_PREFLIGHT)
 
     network = cloud.os_cloud.network.find_network(prefix)
     network_created = False
@@ -1351,10 +1391,10 @@ def run(
 
     if shutdown_requested:
         logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
-        raise typer.Exit(code=130)
+        raise typer.Exit(code=EXIT_ABORTED)
     if report.has_errors:
         logger.error(f"Test completed with errors. Runtime: {runtime:.4f}s")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
 
 

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import ipaddress
+import re
 from pathlib import Path
 
 import signal
@@ -14,8 +15,9 @@ import sys
 import threading
 import time
 import uuid
-from typing import List, cast
+from typing import Any, List, cast
 
+from keystoneauth1.exceptions import ClientException
 from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
@@ -198,6 +200,34 @@ def patch_https_connection_pool(**constructor_kwargs) -> None:
     poolmanager.pool_classes_by_scheme["https"] = MyHTTPSConnectionPool
 
 
+@dataclass
+class OwnedResource:
+    kind: str
+    id: Any
+    name: str
+    obj: Any
+
+
+class Registry:
+    """Resources this run created and has not deleted yet (thread-safe)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._items: dict[Any, OwnedResource] = {}
+
+    def add(self, kind: str, id: Any, name: str, obj: Any) -> None:
+        with self._lock:
+            self._items[id] = OwnedResource(kind, id, name, obj)
+
+    def remove(self, id: Any) -> None:
+        with self._lock:
+            self._items.pop(id, None)
+
+    def items(self, kind: str | None = None) -> list[OwnedResource]:
+        with self._lock:
+            return [r for r in self._items.values() if kind is None or r.kind == kind]
+
+
 class Meta:
 
     def __init__(
@@ -207,12 +237,14 @@ class Meta:
         timeout: int,
         delete: bool,
         run_id: str = "",
+        registry: Registry | None = None,
     ):
         self.wait = wait
         self.interval = interval
         self.timeout = timeout
         self.delete = delete
         self.run_id = run_id
+        self.registry = registry if registry is not None else Registry()
 
 
 def _mark(meta: Meta) -> dict[str, str]:
@@ -247,6 +279,7 @@ class Report:
         self.start_time: float = time.time()
         self.end_time: float | None = None
         self.params: dict = {}
+        self.failed_servers = 0
 
     def record(
         self,
@@ -276,6 +309,14 @@ class Report:
         with self._lock:
             return any(not r.success for r in self._records)
 
+    def print_resources(self, title: str, resources: list[OwnedResource]) -> None:
+        console = Console()
+        console.print(f"[bold]{title}[/bold]")
+        if not resources:
+            console.print("  (none found)")
+        for res in resources:
+            console.print(f"  {res.kind} {res.name} ({res.id})")
+
     def finalize(self) -> None:
         self.end_time = time.time()
 
@@ -288,7 +329,7 @@ class Report:
 
         # Determine status
         errors = [r for r in self._records if not r.success]
-        if errors:
+        if errors or self.failed_servers:
             status = "COMPLETED WITH ERRORS"
         else:
             status = "COMPLETED"
@@ -328,6 +369,7 @@ class Report:
             f" | Cleanup: {'yes' if p.get('cleanup') else 'no'}"
         )
         console.print(f"  Status: {status}")
+        console.print(f"  Failed servers: {self.failed_servers}")
         console.print()
         console.print(f"Total Runtime: {total_runtime:.2f}s")
         console.print("=" * 80)
@@ -582,33 +624,37 @@ def create(
     report: Report | None = None,
 ) -> Instance:
 
-    instance = Instance(
-        cloud,
-        name,
-        user_data,
-        compute_zone,
-        server_group,
-        network,
-        meta,
-        boot_volume_size,
-        storage_zone,
-        volume_type,
-        boot_from_volume,
-        report=report,
-    )
+    try:
+        instance = Instance(
+            cloud,
+            name,
+            user_data,
+            compute_zone,
+            server_group,
+            network,
+            meta,
+            boot_volume_size,
+            storage_zone,
+            volume_type,
+            boot_from_volume,
+            report=report,
+        )
 
-    if volume:
-        for x in range(volume_number):
-            instance.add_volume(
-                f"{name}-volume-{x}",
-                storage_zone,
-                volume_size,
-                volume_type,
-                meta,
-                report=report,
-            )
+        if volume:
+            for x in range(volume_number):
+                instance.add_volume(
+                    f"{name}-volume-{x}",
+                    storage_zone,
+                    volume_size,
+                    volume_type,
+                    meta,
+                    report=report,
+                )
 
-    instance.attach_volumes(report=report)
+        instance.attach_volumes(report=report)
+    except Exception:
+        _delete_partial(cloud, name, meta, report)
+        raise
 
     if meta.delete:
         delete_server(instance, meta, report=report)
@@ -644,6 +690,7 @@ def create_volume(
             volume_type=volume_type,
             metadata=_mark(meta),
         )
+        meta.registry.add("volume", volume.id, name, volume)
 
         logger.info(f"Waiting for volume {volume.id}")
         block_storage(cloud.os_cloud).wait_for_status(
@@ -716,6 +763,8 @@ def create_server(
                 metadata=_mark(meta),
             )
 
+    meta.registry.add("server", server.id, name, server)
+
     logger.info(f"Waiting for server {server.id} ({name})")
     with track("server_wait_active", name):
         cloud.os_cloud.compute.wait_for_server(
@@ -747,24 +796,115 @@ def delete_server(instance: Instance, meta: Meta, report: Report | None = None) 
     track = report.track if report else _noop_track
 
     with track("server_delete", instance.server_name):
-        instance.cloud.os_cloud.compute.delete_server(instance.server)
-        logger.info(
-            f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
-        )
-        instance.cloud.os_cloud.compute.wait_for_delete(
-            instance.server, interval=meta.interval, wait=meta.timeout
-        )
+        try:
+            instance.cloud.os_cloud.compute.delete_server(instance.server)
+            logger.info(
+                f"Waiting for deletion of server {instance.server.id} ({instance.server_name})"
+            )
+            instance.cloud.os_cloud.compute.wait_for_delete(
+                instance.server, interval=meta.interval, wait=meta.timeout
+            )
+        except openstack.exceptions.NotFoundException:
+            pass
+    meta.registry.remove(instance.server.id)
 
     for volume in instance.volumes:
         logger.info(
             f"Deleting volume {volume.id} from server {instance.server.id} ({instance.server_name})"
         )
         with track("volume_delete", f"{instance.server_name}-vol-{volume.id}"):
-            block_storage(instance.cloud.os_cloud).delete_volume(volume)
-            logger.info(f"Waiting for deletion of volume {volume.id}")
-            block_storage(instance.cloud.os_cloud).wait_for_delete(
-                volume, interval=meta.interval, wait=meta.timeout
-            )
+            try:
+                block_storage(instance.cloud.os_cloud).delete_volume(volume)
+                logger.info(f"Waiting for deletion of volume {volume.id}")
+                block_storage(instance.cloud.os_cloud).wait_for_delete(
+                    volume, interval=meta.interval, wait=meta.timeout
+                )
+            except openstack.exceptions.NotFoundException:
+                pass
+        meta.registry.remove(volume.id)
+
+
+def _delete_owned(
+    cloud: Cloud, res: OwnedResource, meta: Meta, report: Report | None = None
+) -> bool:
+    """Delete one owned resource and unregister it; a 404 counts as deleted."""
+    track = report.track if report else _noop_track
+    os_cloud = cloud.os_cloud
+
+    def _delete() -> None:
+        try:
+            if res.kind == "server":
+                os_cloud.compute.delete_server(res.obj)
+                os_cloud.compute.wait_for_delete(
+                    res.obj, interval=meta.interval, wait=meta.timeout
+                )
+            elif res.kind == "volume":
+                block_storage(os_cloud).delete_volume(res.obj)
+                block_storage(os_cloud).wait_for_delete(
+                    res.obj, interval=meta.interval, wait=meta.timeout
+                )
+            elif res.kind == "server_group":
+                os_cloud.compute.delete_server_group(res.obj)
+            elif res.kind == "subnet":
+                os_cloud.network.delete_subnet(res.obj, ignore_missing=False)
+            elif res.kind == "network":
+                os_cloud.network.delete_network(res.obj, ignore_missing=False)
+        except openstack.exceptions.NotFoundException:
+            pass  # already gone: counts as deleted, inside track() on purpose
+
+    try:
+        with track(f"{res.kind}_delete", res.name):
+            _delete()
+    except Exception as e:
+        logger.error(f"Error deleting {res.kind} {res.name} ({res.id}): {e}")
+        return False
+    meta.registry.remove(res.id)
+    return True
+
+
+def _delete_partial(
+    cloud: Cloud, server_name: str, meta: Meta, report: Report | None = None
+) -> None:
+    """Delete what a failed create path already created for this server."""
+    for res in meta.registry.items("server"):
+        if res.name == server_name:
+            _delete_owned(cloud, res, meta, report)
+    for res in meta.registry.items("volume"):
+        if res.name.startswith(f"{server_name}-volume-"):
+            _delete_owned(cloud, res, meta, report)
+
+
+def _sweep(cloud: Cloud, prefix: str, meta: Meta, report: Report | None = None) -> None:
+    """Delete owned servers and volumes still present, found by name and mark."""
+    os_cloud = cloud.os_cloud
+    # Discovery failures must not stop the cleanup of what the registry knows.
+    try:
+        # Nova evaluates the name filter as a regular expression.
+        for s in os_cloud.compute.servers(name=f"^{re.escape(prefix)}-"):
+            if (s.metadata or {}).get(RUN_MARK_KEY) == meta.run_id:
+                meta.registry.add("server", s.id, s.name, s)
+    except Exception as e:
+        logger.error(f"Listing servers for the final sweep failed: {e}")
+        if report:
+            report.record("sweep_discovery", "servers", 0.0, False, str(e))
+    try:
+        for v in block_storage(os_cloud).volumes(details=True):
+            if (
+                v.name
+                and v.name.startswith(f"{prefix}-")
+                and (v.metadata or {}).get(RUN_MARK_KEY) == meta.run_id
+            ):
+                meta.registry.add("volume", v.id, v.name, v)
+    except (EndpointNotFound, openstack.exceptions.ServiceDisabledException):
+        pass
+    except Exception as e:
+        logger.error(f"Listing volumes for the final sweep failed: {e}")
+        if report:
+            report.record("sweep_discovery", "volumes", 0.0, False, str(e))
+    for res in meta.registry.items("server"):
+        _delete_owned(cloud, res, meta, report)
+    for res in meta.registry.items("volume"):
+        _delete_owned(cloud, res, meta, report)
 
 
 class AffinitySetting(str, Enum):
@@ -1140,64 +1280,76 @@ def run(
         logger.error(str(e))
         raise typer.Exit(code=EXIT_PREFLIGHT)
 
-    network = cloud.os_cloud.network.find_network(prefix)
-    network_created = False
-    if network:
-        logger.info(f"Using existing network {prefix}")
-    elif no_network:
-        logger.error(f"Network {prefix} not found (required by --no-network)")
-        raise typer.Exit(code=1)
-    else:
-        logger.info(f"Creating network {prefix}")
-        with report.track("network_create", prefix):
-            network = cloud.os_cloud.network.create_network(
-                name=prefix, description=_mark_description(meta)
-            )
-        network_created = True
-
+    setup_ok = True
+    network = subnet = server_group = None
     subnet_name = f"{prefix}-subnet"
-    subnet = cloud.os_cloud.network.find_subnet(subnet_name)
-    subnet_created = False
-    if subnet:
-        logger.info(f"Using existing subnet {subnet_name}")
-    elif no_network:
-        logger.error(f"Subnet {subnet_name} not found (required by --no-network)")
-        raise typer.Exit(code=1)
-    else:
-        logger.info(f"Creating subnet {subnet_name}")
-        try:
-            ipaddress.ip_network(subnet_cidr)
-        except ValueError:
-            logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
-            subnet_cidr = "10.100.0.0/16"
+    try:
+        network = cloud.os_cloud.network.find_network(prefix)
+        if network:
+            logger.info(f"Using existing network {prefix}")
+        elif no_network:
+            logger.error(f"Network {prefix} not found (required by --no-network)")
+            raise typer.Exit(code=EXIT_FAILED)
+        else:
+            logger.info(f"Creating network {prefix}")
+            with report.track("network_create", prefix):
+                network = cloud.os_cloud.network.create_network(
+                    name=prefix, description=_mark_description(meta)
+                )
+            meta.registry.add("network", network.id, prefix, network)
 
-        with report.track("subnet_create", subnet_name):
-            subnet = cloud.os_cloud.network.create_subnet(
-                name=subnet_name,
-                network_id=network.id,
-                ip_version="4",
-                cidr=subnet_cidr,
-                description=_mark_description(meta),
-            )
-        subnet_created = True
+        subnet = cloud.os_cloud.network.find_subnet(subnet_name)
+        if subnet:
+            logger.info(f"Using existing subnet {subnet_name}")
+        elif no_network:
+            logger.error(f"Subnet {subnet_name} not found (required by --no-network)")
+            raise typer.Exit(code=EXIT_FAILED)
+        else:
+            logger.info(f"Creating subnet {subnet_name}")
+            try:
+                ipaddress.ip_network(subnet_cidr)
+            except ValueError:
+                logger.error(f"Invalid subnet-cidr '{subnet_cidr}'. Using fallback...")
+                subnet_cidr = "10.100.0.0/16"
 
-    server_group = cloud.os_cloud.compute.find_server_group(prefix)
-    server_group_created = False
-    if server_group:
-        logger.info(f"Using existing server group {prefix}")
-    else:
-        logger.info(f"Creating server group {prefix}")
-        with report.track("server_group_create", prefix):
-            server_group = cloud.os_cloud.compute.create_server_group(
-                name=prefix, policies=[affinity.value]
-            )
-        server_group_created = True
+            with report.track("subnet_create", subnet_name):
+                subnet = cloud.os_cloud.network.create_subnet(
+                    name=subnet_name,
+                    network_id=network.id,
+                    ip_version="4",
+                    cidr=subnet_cidr,
+                    description=_mark_description(meta),
+                )
+            meta.registry.add("subnet", subnet.id, subnet_name, subnet)
+
+        server_group = cloud.os_cloud.compute.find_server_group(prefix)
+        if server_group:
+            logger.info(f"Using existing server group {prefix}")
+        else:
+            logger.info(f"Creating server group {prefix}")
+            with report.track("server_group_create", prefix):
+                server_group = cloud.os_cloud.compute.create_server_group(
+                    name=prefix, policies=[affinity.value]
+                )
+            meta.registry.add("server_group", server_group.id, prefix, server_group)
+    except (openstack.exceptions.SDKException, ClientException) as e:
+        logger.error(f"Setup failed: {e}")
+        setup_ok = False
 
     completed_instances = []
 
     # In burnin mode, instances must not be deleted during creation
     burnin_meta = (
-        Meta(not no_wait, interval, timeout, False, run_id=run_id) if burnin else None
+        Meta(
+            not no_wait,
+            interval,
+            timeout,
+            False,
+            run_id=run_id,
+            registry=meta.registry,
+        )
+        if burnin
+        else None
     )
 
     def _submit_create(pool, server_index):
@@ -1220,7 +1372,9 @@ def run(
             report,
         )
 
-    if burnin:
+    if not setup_ok:
+        logger.error("Skipping servers because setup failed")
+    elif burnin:
         # Burnin mode: create all instances, wait for duration, then delete
         logger.info(
             f"BURNIN MODE: Creating {number} instance(s) with stress-ng"
@@ -1248,6 +1402,7 @@ def run(
                 )
             except Exception as e:
                 logger.error(f"Error creating server: {e}")
+                report.failed_servers += 1
 
         pool.shutdown(wait=True)
 
@@ -1287,7 +1442,14 @@ def run(
         # Cleanup: delete instances unless --no-cleanup is set
         if cleanup and completed_instances:
             logger.info("Deleting burnin instances...")
-            delete_meta = Meta(not no_wait, interval, timeout, True, run_id=run_id)
+            delete_meta = Meta(
+                not no_wait,
+                interval,
+                timeout,
+                True,
+                run_id=run_id,
+                registry=meta.registry,
+            )
             cleanup_pool = ThreadPoolExecutor(max_workers=parallel)
             futures_delete = []
             for instance in completed_instances:
@@ -1365,6 +1527,7 @@ def run(
                     logger.info(f"Server {instance.server.id} finished")
                 except Exception as e:
                     logger.error(f"Error creating server: {e}")
+                    report.failed_servers += 1
 
             if block_aborted:
                 logger.info(f"Block {block_idx + 1}/{total_blocks} aborted")
@@ -1389,6 +1552,7 @@ def run(
                 logger.info(f"Server {instance.server.id} finished")
             except Exception as e:
                 logger.error(f"Error creating server: {e}")
+                report.failed_servers += 1
 
         # Cancel remaining futures if shutdown was requested
         if shutdown_requested:
@@ -1438,45 +1602,45 @@ def run(
                     except Exception as e:
                         logger.error(f"Error deleting volume {vol.id}: {e}")
 
-    # Clean up infrastructure resources
-    # With --no-cleanup, servers may still be running on the network, so keep
-    # the infrastructure as well
-    if not cleanup:
-        logger.info("Skipping infrastructure cleanup (--no-cleanup set)")
+    # Clean up what this run created and still exists. With --no-cleanup,
+    # servers may still be running on the network, so keep everything.
+    if cleanup:
+        _sweep(cloud, prefix, meta, report)
+        for kind in ("server_group", "subnet", "network"):
+            for res in meta.registry.items(kind):
+                _delete_owned(cloud, res, meta, report)
     else:
-        if server_group_created:
-            try:
-                logger.info(f"Deleting server group {prefix}")
-                with report.track("server_group_delete", prefix):
-                    cloud.os_cloud.compute.delete_server_group(server_group)
-            except Exception as e:
-                logger.error(f"Error deleting server group: {e}")
-
-        if subnet_created:
-            try:
-                logger.info(f"Deleting subnet {prefix}-subnet")
-                with report.track("subnet_delete", subnet_name):
-                    cloud.os_cloud.network.delete_subnet(subnet, ignore_missing=False)
-            except Exception as e:
-                logger.error(f"Error deleting subnet: {e}")
-
-        if network_created:
-            try:
-                logger.info(f"Deleting network {prefix}")
-                with report.track("network_delete", prefix):
-                    cloud.os_cloud.network.delete_network(network, ignore_missing=False)
-            except Exception as e:
-                logger.error(f"Error deleting network: {e}")
+        logger.info("Skipping infrastructure cleanup (--no-cleanup set)")
 
     report.finalize()
     report.print_report()
 
     runtime = (report.end_time or time.time()) - report.start_time
 
+    leftovers = meta.registry.items()
+    if leftovers:
+        if cleanup:
+            logger.error("Resources that could not be deleted:")
+            report.print_resources(
+                f"Not deleted - remove with --clean --prefix {prefix}", leftovers
+            )
+        else:
+            logger.info("Kept resources (--no-cleanup):")
+            report.print_resources("Kept resources (--no-cleanup)", leftovers)
+        for res in leftovers:
+            logger.info(f"  {res.kind} {res.name} ({res.id})")
+        if cleanup:
+            logger.error(f"Remove them with: --clean --prefix {prefix}")
+
     if shutdown_requested:
         logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
         raise typer.Exit(code=EXIT_ABORTED)
-    if report.has_errors:
+    if (
+        report.has_errors
+        or report.failed_servers
+        or not setup_ok
+        or (cleanup and leftovers)
+    ):
         logger.error(f"Test completed with errors. Runtime: {runtime:.4f}s")
         raise typer.Exit(code=EXIT_FAILED)
     logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")

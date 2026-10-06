@@ -1,0 +1,19 @@
+---
+- name: Post integration test play
+  hosts: all
+
+  tasks:
+    - name: Collect devstack service logs
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          out="{{ ansible_user_dir }}/zuul-output/logs/devstack"
+          mkdir -p "$out"
+          systemctl list-units 'devstack@*' --all --plain --no-legend \
+            | awk '{print $1}' \
+            | while read -r unit; do
+                sudo journalctl -u "$unit" --no-pager > "$out/${unit}.txt"
+              done
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false

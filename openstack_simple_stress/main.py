@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import ipaddress
+import re
 from pathlib import Path
 
 import signal
@@ -33,6 +34,10 @@ logger.remove()
 logger.add(sys.stderr, format=log_fmt, level="INFO", colorize=True)
 
 shutdown_requested = False
+
+EXIT_FAILED = 1
+EXIT_PREFLIGHT = 2
+EXIT_ABORTED = 130
 
 VALID_PROFILE_KEYS = {
     "clean",
@@ -415,24 +420,55 @@ def block_storage(
     return cast(openstack.block_storage.v3._proxy.Proxy, os_cloud.block_storage)
 
 
+class PreflightError(Exception):
+    """A check before creating anything failed; the run exits with code 2."""
+
+
 class Cloud:
 
     def __init__(self, cloud_name: str, flavor_name: str, image_name: str):
         self.os_cloud = openstack.connect(cloud=cloud_name)
 
         logger.info(f"Checking flavor {flavor_name}")
-        self.os_flavor = self.os_cloud.get_flavor(flavor_name)
-        if self.os_flavor is None:
-            logger.error(f"Flavor '{flavor_name}' not found")
-            sys.exit(1)
+        flavor = self.os_cloud.get_flavor(flavor_name)
+        if flavor is None:
+            raise PreflightError(f"Flavor '{flavor_name}' not found")
+        self.os_flavor = flavor
         logger.info(f"flavor.id = {self.os_flavor.id}")
 
         logger.info(f"Checking image {image_name}")
-        self.os_image = self.os_cloud.get_image(image_name)
-        if self.os_image is None:
-            logger.error(f"Image '{image_name}' not found")
-            sys.exit(1)
+        image = self.os_cloud.get_image(image_name)
+        if image is None:
+            raise PreflightError(f"Image '{image_name}' not found")
+        self.os_image = image
         logger.info(f"image.id = {self.os_image.id}")
+
+
+def preflight(cloud: Cloud, *, boot_from_volume: bool, volumes: bool) -> None:
+    """Fail before creating anything if the run cannot work.
+
+    Raises PreflightError with a message for the operator.
+    """
+    flavor, image = cloud.os_flavor, cloud.os_image
+    if not boot_from_volume:
+        if not flavor.disk:
+            raise PreflightError(
+                f"Flavor '{flavor.name}' has no root disk, which local boot "
+                "(--no-boot-volume) needs; use a flavor with a disk"
+            )
+        min_disk = image.min_disk or 0
+        if flavor.disk < min_disk:
+            raise PreflightError(
+                f"Flavor '{flavor.name}' disk ({flavor.disk} GB) is smaller than "
+                f"the min_disk of image '{image.name}' ({min_disk} GB)"
+            )
+    if (boot_from_volume or volumes) and not cloud.os_cloud.has_service(
+        "block-storage"
+    ):
+        raise PreflightError(
+            "The cloud has no block storage service; "
+            "use --no-volume --no-boot-volume"
+        )
 
 
 class Instance:
@@ -453,6 +489,7 @@ class Instance:
         report: Report | None = None,
     ):
         self.cloud = cloud
+        self.meta = meta
 
         self.server = create_server(
             self.cloud,
@@ -499,7 +536,9 @@ class Instance:
                 f"Attaching volume {volume.id} to server {self.server.id} ({self.server_name})"
             )
             with track("volume_attach", f"{self.server_name}-vol-{volume.id}"):
-                self.cloud.os_cloud.attach_volume(self.server, volume)
+                self.cloud.os_cloud.attach_volume(
+                    self.server, volume, timeout=self.meta.timeout
+                )
 
             logger.info(f"Refreshing details of {self.server.id} ({self.server_name})")
             self.server = self.cloud.os_cloud.compute.get_server(self.server.id)
@@ -663,12 +702,18 @@ def create_server(
     if meta.wait:
         logger.info(f"Waiting for boot of {server.id} ({name})")
         with track("server_wait_boot", name):
+            deadline = time.time() + meta.timeout
             while True:
                 console = cloud.os_cloud.compute.get_server_console_output(server)
                 if "Failed to run module scripts-user" in str(console):
                     logger.error(f"Failed tests for {server.id} ({name})")
                 if "The system is finally up" in str(console):
                     break
+                if time.time() >= deadline:
+                    raise TimeoutError(
+                        f"Server {server.id} ({name}) did not finish booting "
+                        f"within {meta.timeout}s"
+                    )
                 time.sleep(1.0)
 
     return server
@@ -711,14 +756,24 @@ class ExecutionMode(str, Enum):
     block = "block"
 
 
+def _stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
 def clean_resources(
     cloud_name: str,
     prefix: str,
     debug: bool,
     parallel: int = 1,
     no_network: bool = False,
-) -> None:
-    """Find and delete all resources from a previous run with the given prefix."""
+    assume_yes: bool = False,
+    interval: int = 2,
+    timeout: int = 600,
+) -> bool:
+    """Find and delete all resources from a previous run with the given prefix.
+
+    Returns False if deletion was refused or anything could not be deleted.
+    """
 
     openstack.enable_logging(debug=debug, http_debug=debug)
     os_cloud = openstack.connect(cloud=cloud_name)
@@ -729,7 +784,12 @@ def clean_resources(
     resources: list[tuple[str, str, str, str]] = []
 
     logger.info(f"Searching for servers with prefix '{prefix}'...")
-    servers = list(os_cloud.compute.servers(name=f"^{prefix}-"))
+    # Nova evaluates the name filter as a regular expression.
+    servers = [
+        s
+        for s in os_cloud.compute.servers(name=f"^{re.escape(prefix)}-")
+        if s.name.startswith(f"{prefix}-")
+    ]
     for s in servers:
         resources.append(("Server", s.name, s.id, s.status))
 
@@ -742,7 +802,7 @@ def clean_resources(
         ]
         for v in matching_volumes:
             resources.append(("Volume", v.name, v.id, v.status))
-    except EndpointNotFound:
+    except (EndpointNotFound, openstack.exceptions.ServiceDisabledException):
         logger.warning("Block storage service not available, skipping volume cleanup")
 
     logger.info(f"Searching for server group '{prefix}'...")
@@ -766,7 +826,7 @@ def clean_resources(
 
     if not resources:
         logger.info(f"No resources found with prefix '{prefix}'")
-        return
+        return True
 
     # Display found resources
     table = Table(title=f"Resources found with prefix '{prefix}'")
@@ -782,49 +842,61 @@ def clean_resources(
     console.print(table)
     console.print()
 
-    # Ask for confirmation
-    try:
-        response = (
-            input(f"Delete all {len(resources)} resource(s)? (y/N): ").strip().lower()
-        )
-    except (EOFError, KeyboardInterrupt):
-        logger.info("\nAborted.")
-        return
-
-    if response not in ["y", "yes"]:
-        logger.info("Aborted.")
-        return
+    if not assume_yes:
+        if not _stdin_is_tty():
+            logger.error(
+                "Not deleting: no terminal to confirm on. "
+                "Run again with --yes to delete without confirmation."
+            )
+            return False
+        try:
+            response = (
+                input(f"Delete all {len(resources)} resource(s)? (y/N): ")
+                .strip()
+                .lower()
+            )
+        except (EOFError, KeyboardInterrupt):
+            logger.info("\nAborted.")
+            return True
+        if response not in ["y", "yes"]:
+            logger.info("Aborted.")
+            return True
 
     # Delete in order: servers, volumes, server group, subnet, network
-    def _delete_server(s: openstack.compute.v2.server.Server) -> None:
+    def _delete_server(s: openstack.compute.v2.server.Server) -> bool:
         try:
             logger.info(f"Deleting server {s.name} ({s.id})")
             os_cloud.compute.delete_server(s)
-            os_cloud.compute.wait_for_delete(s)
+            os_cloud.compute.wait_for_delete(s, interval=interval, wait=timeout)
             logger.info(f"Server {s.name} deleted")
+            return True
         except Exception as e:
             logger.error(f"Error deleting server {s.name}: {e}")
+            return False
 
-    def _delete_volume(v: openstack.block_storage.v3.volume.Volume) -> None:
+    def _delete_volume(v: openstack.block_storage.v3.volume.Volume) -> bool:
         try:
             logger.info(f"Deleting volume {v.name} ({v.id})")
             block_storage(os_cloud).delete_volume(v)
-            block_storage(os_cloud).wait_for_delete(v)
+            block_storage(os_cloud).wait_for_delete(v, interval=interval, wait=timeout)
             logger.info(f"Volume {v.name} deleted")
+            return True
         except Exception as e:
             logger.error(f"Error deleting volume {v.name}: {e}")
+            return False
 
     # Delete servers first; volumes may still be attached and cannot be
     # removed until their server is gone.
+    ok = True
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [pool.submit(_delete_server, s) for s in servers]
         for future in as_completed(futures):
-            future.result()
+            ok = future.result() and ok
 
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [pool.submit(_delete_volume, v) for v in matching_volumes]
         for future in as_completed(futures):
-            future.result()
+            ok = future.result() and ok
 
     if server_group:
         try:
@@ -835,6 +907,7 @@ def clean_resources(
             logger.info(f"Server group {server_group.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting server group: {e}")
+            ok = False
 
     if subnet:
         try:
@@ -843,6 +916,7 @@ def clean_resources(
             logger.info(f"Subnet {subnet.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting subnet: {e}")
+            ok = False
 
     if network:
         try:
@@ -851,8 +925,13 @@ def clean_resources(
             logger.info(f"Network {network.name} deleted")
         except Exception as e:
             logger.error(f"Error deleting network: {e}")
+            ok = False
 
-    logger.info("Cleanup completed")
+    if ok:
+        logger.info("Cleanup completed")
+    else:
+        logger.error("Cleanup incomplete; see the errors above")
+    return ok
 
 
 def run(
@@ -861,6 +940,10 @@ def run(
         str, typer.Option("--profile", help="Path to a YAML profile file")
     ] = "",
     clean: Annotated[bool, typer.Option("--clean")] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Do not ask for confirmation in --clean mode"),
+    ] = False,
     no_cleanup: Annotated[bool, typer.Option("--no-cleanup")] = False,
     debug: Annotated[bool, typer.Option("--debug")] = False,
     no_delete: Annotated[bool, typer.Option("--no-delete")] = False,
@@ -869,7 +952,7 @@ def run(
     no_boot_volume: Annotated[bool, typer.Option("--no-boot-volume")] = False,
     no_network: Annotated[bool, typer.Option("--no-network")] = False,
     no_wait: Annotated[bool, typer.Option("--no-wait")] = False,
-    interval: Annotated[int, typer.Option("--interval")] = 10,
+    interval: Annotated[int, typer.Option("--interval")] = 2,
     number: Annotated[int, typer.Option("--number")] = 1,
     parallel: Annotated[int, typer.Option("--parallel")] = 1,
     mode: Annotated[ExecutionMode, typer.Option("--mode")] = ExecutionMode.rolling,
@@ -952,7 +1035,17 @@ def run(
 
     # Clean mode: find and delete leftover resources from a previous run
     if clean:
-        clean_resources(cloud_name, prefix, debug, parallel, no_network)
+        if not clean_resources(
+            cloud_name,
+            prefix,
+            debug,
+            parallel,
+            no_network,
+            assume_yes=yes,
+            interval=interval,
+            timeout=timeout,
+        ):
+            raise typer.Exit(code=EXIT_FAILED)
         return
 
     # Validate burnin options
@@ -1019,7 +1112,12 @@ def run(
     if burnin:
         report.params["burnin_duration"] = f"{burnin_duration}h"
 
-    cloud = Cloud(cloud_name, flavor_name, image_name)
+    try:
+        cloud = Cloud(cloud_name, flavor_name, image_name)
+        preflight(cloud, boot_from_volume=not no_boot_volume, volumes=volume)
+    except PreflightError as e:
+        logger.error(str(e))
+        raise typer.Exit(code=EXIT_PREFLIGHT)
 
     network = cloud.os_cloud.network.find_network(prefix)
     network_created = False
@@ -1351,10 +1449,10 @@ def run(
 
     if shutdown_requested:
         logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
-        raise typer.Exit(code=130)
+        raise typer.Exit(code=EXIT_ABORTED)
     if report.has_errors:
         logger.error(f"Test completed with errors. Runtime: {runtime:.4f}s")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
 
 

@@ -30,6 +30,10 @@ class TestCLI(unittest.TestCase):
         self.mock_os_cloud.network.find_subnet.return_value = None
         self.mock_os_cloud.compute.find_server_group.return_value = None
 
+        tty = patch("openstack_simple_stress.main._stdin_is_tty", return_value=True)
+        tty.start()
+        self.addCleanup(tty.stop)
+
         self.runner = CliRunner()
 
     def test_cli_0(self):
@@ -264,12 +268,14 @@ class TestCLI(unittest.TestCase):
         result = self.runner.invoke(app, ["--clean"], input="y\n")
         self.assertEqual(result.exit_code, 0, (result, result.stdout))
         self.mock_os_cloud.compute.delete_server.assert_called_once_with(mock_server)
-        self.mock_os_cloud.compute.wait_for_delete.assert_called_once_with(mock_server)
+        self.mock_os_cloud.compute.wait_for_delete.assert_called_once_with(
+            mock_server, interval=2, wait=600
+        )
         self.mock_os_cloud.block_storage.delete_volume.assert_called_once_with(
             mock_volume
         )
         self.mock_os_cloud.block_storage.wait_for_delete.assert_called_once_with(
-            mock_volume
+            mock_volume, interval=2, wait=600
         )
         self.mock_os_cloud.compute.delete_server_group.assert_called_once_with(
             mock_server_group
@@ -434,6 +440,107 @@ class TestCLI(unittest.TestCase):
     def test_aborted_run_exits_nonzero(self):
         result = self.runner.invoke(app, ["--number=2"])
         self.assertEqual(result.exit_code, 130, (result, result.stdout))
+
+    @patch("openstack_simple_stress.main.time")
+    def test_boot_wait_is_bounded_by_timeout(self, mock_time):
+        clock = iter(range(0, 10**7, 100))
+        mock_time.time.side_effect = lambda: next(clock)
+        self.mock_os_cloud.compute.get_server_console_output.return_value = (
+            "still booting"
+        )
+
+        result = self.runner.invoke(app, ["--timeout=600"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.assertIn("did not finish booting", result.stdout)
+
+    def test_default_interval_is_2_seconds(self):
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        _, kwargs = self.mock_os_cloud.compute.wait_for_server.call_args
+        self.assertEqual(kwargs["interval"], 2)
+
+    def test_volume_attach_wait_is_bounded_by_timeout(self):
+        result = self.runner.invoke(app, ["--timeout=321"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        _, kwargs = self.mock_os_cloud.attach_volume.call_args
+        self.assertEqual(kwargs["timeout"], 321)
+
+    def _one_server_to_clean(self):
+        server = MagicMock()
+        server.name = "simple-stress-0"
+        server.id = "srv-1"
+        server.status = "ACTIVE"
+        self.mock_os_cloud.compute.servers.return_value = [server]
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+        return server
+
+    def test_clean_yes_skips_prompt(self):
+        server = self._one_server_to_clean()
+
+        result = self.runner.invoke(app, ["--clean", "--yes"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.delete_server.assert_called_once_with(server)
+
+    @patch("openstack_simple_stress.main._stdin_is_tty", return_value=False)
+    def test_clean_without_tty_refuses(self, _):
+        self._one_server_to_clean()
+
+        result = self.runner.invoke(app, ["--clean"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.mock_os_cloud.compute.delete_server.assert_not_called()
+
+    def test_clean_delete_failure_exits_1(self):
+        self._one_server_to_clean()
+        self.mock_os_cloud.compute.delete_server.side_effect = Exception("409")
+
+        result = self.runner.invoke(app, ["--clean", "--yes"])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+
+    def test_clean_without_block_storage_skips_volumes(self):
+        import openstack.exceptions
+
+        self._one_server_to_clean()
+        self.mock_os_cloud.block_storage.volumes.side_effect = (
+            openstack.exceptions.ServiceDisabledException("disabled")
+        )
+
+        result = self.runner.invoke(app, ["--clean", "--yes"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.delete_server.assert_called_once()
+
+    def test_clean_uses_interval_and_timeout(self):
+        server = self._one_server_to_clean()
+
+        result = self.runner.invoke(
+            app, ["--clean", "--yes", "--interval=3", "--timeout=99"]
+        )
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.wait_for_delete.assert_called_once_with(
+            server, interval=3, wait=99
+        )
+
+    def test_clean_prefix_is_matched_literally(self):
+        own = MagicMock()
+        own.name = "a.b-0"
+        own.id = "srv-own"
+        own.status = "ACTIVE"
+        other = MagicMock()
+        other.name = "aXb-0"
+        other.id = "srv-other"
+        other.status = "ACTIVE"
+        self.mock_os_cloud.compute.servers.return_value = [own, other]
+        self.mock_os_cloud.block_storage.volumes.return_value = []
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean", "--yes", "--prefix=a.b"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.servers.assert_called_once_with(name=r"^a\.b-")
+        self.mock_os_cloud.compute.delete_server.assert_called_once_with(own)
 
 
 if __name__ == "__main__":

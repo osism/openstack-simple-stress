@@ -245,6 +245,33 @@ class TestOwnership(unittest.TestCase):
         self.os.compute.delete_server_group.assert_not_called()
         self.assertIn("possible leftover", result.stdout)
 
+    @patch("openstack_simple_stress.main.time.sleep")
+    def test_reconcile_survives_a_failing_lookup(self, _):
+        accepted = MagicMock()
+        self.os.network.create_network.side_effect = ConnectFailure("aborted")
+        self.os.network.networks.side_effect = [ConnectFailure("again"), [accepted]]
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.os.network.delete_network.assert_called_once_with(
+            accepted, ignore_missing=False
+        )
+
+    @patch("openstack_simple_stress.main.time.sleep")
+    def test_sweep_finds_marked_network_reconciliation_missed(self, _):
+        accepted = MagicMock()
+        self.os.network.create_network.side_effect = ConnectFailure("aborted")
+        self.os.network.networks.side_effect = lambda **kw: (
+            [] if "name" in kw else [accepted]
+        )
+
+        result = self.runner.invoke(app, [])
+        self.assertEqual(result.exit_code, 1, (result, result.stdout))
+        self.os.network.networks.assert_any_call(description="simple-stress-run=run-1")
+        self.os.network.delete_network.assert_called_once_with(
+            accepted, ignore_missing=False
+        )
+
     def test_no_delete_run_deletes_each_volume_once(self):
         result = self.runner.invoke(app, ["--no-delete"])
         self.assertEqual(result.exit_code, 0, (result, result.stdout))

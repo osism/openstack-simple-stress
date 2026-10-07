@@ -223,6 +223,7 @@ class TestBurnin(unittest.TestCase):
             mock_report.end_time = 99999
             mock_report.start_time = 0
             mock_report.has_errors = False
+            mock_report.failed_servers = 0
             mock_report_cls.return_value = mock_report
 
             result = self.runner.invoke(

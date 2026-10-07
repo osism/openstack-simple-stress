@@ -1,6 +1,7 @@
 ---
 - job:
     name: openstack-simple-stress-test
+    nodeset: ubuntu-noble
     pre-run: playbooks/pre-test.yml
     run: playbooks/test.yml
     timeout: 14400
@@ -13,15 +14,23 @@
     default-branch: main
     check:
       jobs:
-        - flake8
-        - mypy
+        - flake8:
+            nodeset: ubuntu-noble
+        - mypy:
+            nodeset: ubuntu-noble
         - openstack-simple-stress-test
-        - python-black
-        - yamllint
+        - python-black:
+            nodeset: ubuntu-noble
+        - yamllint:
+            nodeset: ubuntu-noble
     periodic-daily:
       jobs:
-        - flake8
-        - mypy
+        - flake8:
+            nodeset: ubuntu-noble
+        - mypy:
+            nodeset: ubuntu-noble
         - openstack-simple-stress-test
-        - python-black
-        - yamllint
+        - python-black:
+            nodeset: ubuntu-noble
+        - yamllint:
+            nodeset: ubuntu-noble

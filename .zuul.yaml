@@ -3,6 +3,7 @@
     name: openstack-simple-stress-test
     pre-run: playbooks/pre-test.yml
     run: playbooks/test.yml
+    post-run: playbooks/post-test.yml
     timeout: 14400
     roles:
       - zuul: osism/zuul-jobs
@@ -17,6 +18,9 @@
         - mypy
         - openstack-simple-stress-test
         - python-black
+        - tox:
+            vars:
+              tox_envlist: test
         - yamllint
     periodic-daily:
       jobs:
@@ -24,4 +28,7 @@
         - mypy
         - openstack-simple-stress-test
         - python-black
+        - tox:
+            vars:
+              tox_envlist: test
         - yamllint

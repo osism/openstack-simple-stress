@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from importlib import resources
 import ipaddress
 from pathlib import Path
 
@@ -16,7 +15,6 @@ import threading
 import time
 from typing import List, cast
 
-import click
 from keystoneauth1.exceptions.catalog import EndpointNotFound
 from loguru import logger
 import openstack
@@ -73,22 +71,35 @@ PROFILE_KEY_TO_PARAM = {
     "image": "image_name",
 }
 
+BUILTIN_PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
+
 
 def _resolve_builtin_profile(name: str) -> Path | None:
-    """Resolve a built-in profile name to its path using importlib.resources."""
+    """Resolve a built-in profile name to its path in the profiles directory.
+
+    The directory is located relative to this file rather than through
+    importlib.resources, because main.py is usually run as a script (tox,
+    Zuul, the osism container), where the package is not importable.
+    """
     candidates = [name]
     if not name.endswith((".yaml", ".yml")):
         candidates.append(f"{name}.yaml")
 
     for candidate in candidates:
-        ref = resources.files("openstack_simple_stress.profiles").joinpath(candidate)
-        try:
-            with resources.as_file(ref) as p:
-                if p.exists():
-                    return p
-        except (FileNotFoundError, TypeError):
-            continue
+        path = BUILTIN_PROFILES_DIR / candidate
+        if path.is_file():
+            return path
     return None
+
+
+def _is_default(ctx: typer.Context, param_name: str) -> bool:
+    """Return True if the parameter was not given on the command line.
+
+    Typer vendors its own copy of click, so its ParameterSource is not the
+    enum from the click package. Compare by member name to work with both.
+    """
+    source = ctx.get_parameter_source(param_name)
+    return source is not None and source.name == "DEFAULT"
 
 
 def load_profile(profile_path: str) -> dict:
@@ -234,6 +245,11 @@ class Report:
         except Exception as e:
             self.record(operation, resource_name, time.time() - start, False, str(e))
             raise
+
+    @property
+    def has_errors(self) -> bool:
+        with self._lock:
+            return any(not r.success for r in self._records)
 
     def finalize(self) -> None:
         self.end_time = time.time()
@@ -895,8 +911,7 @@ def run(
             if yaml_key not in p:
                 return current
             param_name = PROFILE_KEY_TO_PARAM.get(yaml_key, yaml_key)
-            source = ctx.get_parameter_source(param_name)
-            if source == click.core.ParameterSource.DEFAULT:
+            if _is_default(ctx, param_name):
                 return p[yaml_key]
             return current
 
@@ -945,10 +960,7 @@ def run(
         logger.error("--burnin-duration must be at least 1 hour")
         raise typer.Exit(code=1)
 
-    if (
-        burnin
-        and ctx.get_parameter_source("mode") != click.core.ParameterSource.DEFAULT
-    ):
+    if burnin and not _is_default(ctx, "mode"):
         logger.error("--burnin and --mode cannot be used together")
         raise typer.Exit(code=1)
 
@@ -1303,9 +1315,9 @@ def run(
                         logger.error(f"Error deleting volume {vol.id}: {e}")
 
     # Clean up infrastructure resources
-    # In burnin mode with --no-cleanup, keep infrastructure for the running instances
-    skip_infra_cleanup = burnin and not cleanup
-    if skip_infra_cleanup:
+    # With --no-cleanup, servers may still be running on the network, so keep
+    # the infrastructure as well
+    if not cleanup:
         logger.info("Skipping infrastructure cleanup (--no-cleanup set)")
     else:
         if server_group_created:
@@ -1339,8 +1351,11 @@ def run(
 
     if shutdown_requested:
         logger.info(f"Test was aborted - cleanup completed. Runtime: {runtime:.4f}s")
-    else:
-        logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
+        raise typer.Exit(code=130)
+    if report.has_errors:
+        logger.error(f"Test completed with errors. Runtime: {runtime:.4f}s")
+        raise typer.Exit(code=1)
+    logger.info(f"Test completed successfully. Runtime: {runtime:.4f}s")
 
 
 def main() -> None:

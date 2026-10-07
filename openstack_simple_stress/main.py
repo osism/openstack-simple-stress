@@ -405,17 +405,19 @@ class Cloud:
         self.os_cloud = openstack.connect(cloud=cloud_name)
 
         logger.info(f"Checking flavor {flavor_name}")
-        self.os_flavor = self.os_cloud.get_flavor(flavor_name)
-        if self.os_flavor is None:
+        os_flavor = self.os_cloud.get_flavor(flavor_name)
+        if os_flavor is None:
             logger.error(f"Flavor '{flavor_name}' not found")
             sys.exit(1)
+        self.os_flavor = os_flavor
         logger.info(f"flavor.id = {self.os_flavor.id}")
 
         logger.info(f"Checking image {image_name}")
-        self.os_image = self.os_cloud.get_image(image_name)
-        if self.os_image is None:
+        os_image = self.os_cloud.get_image(image_name)
+        if os_image is None:
             logger.error(f"Image '{image_name}' not found")
             sys.exit(1)
+        self.os_image = os_image
         logger.info(f"image.id = {self.os_image.id}")
 
 
@@ -726,7 +728,7 @@ def clean_resources(
         ]
         for v in matching_volumes:
             resources.append(("Volume", v.name, v.id, v.status))
-    except EndpointNotFound:
+    except (EndpointNotFound, openstack.exceptions.ServiceDisabledException):
         logger.warning("Block storage service not available, skipping volume cleanup")
 
     logger.info(f"Searching for server group '{prefix}'...")

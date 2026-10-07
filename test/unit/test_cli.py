@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from unittest.mock import ANY
 
+import openstack
 import typer
 from typer.testing import CliRunner
 
@@ -232,6 +233,23 @@ class TestCLI(unittest.TestCase):
         # Should not validate flavor/image
         self.mock_os_cloud.get_flavor.assert_not_called()
         self.mock_os_cloud.get_image.assert_not_called()
+
+    def test_clean_without_block_storage_service(self):
+        # openstacksdk defers a missing block-storage catalog entry until the
+        # proxy is used and then raises ServiceDisabledException.
+        self.mock_os_cloud.compute.servers.return_value = []
+        self.mock_os_cloud.block_storage.volumes.side_effect = (
+            openstack.exceptions.ServiceDisabledException(
+                "Service 'block-storage' is disabled"
+            )
+        )
+        self.mock_os_cloud.compute.find_server_group.return_value = None
+        self.mock_os_cloud.network.find_subnet.return_value = None
+        self.mock_os_cloud.network.find_network.return_value = None
+
+        result = self.runner.invoke(app, ["--clean"])
+        self.assertEqual(result.exit_code, 0, (result, result.stdout))
+        self.mock_os_cloud.compute.delete_server.assert_not_called()
 
     def test_clean_with_resources_confirmed(self):
         mock_server = MagicMock()

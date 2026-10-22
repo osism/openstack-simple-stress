@@ -10,7 +10,7 @@ idna==3.11
 iso8601==2.1.0
 jmespath==1.1.0
 jsonpatch==1.36
-jsonpointer==3.3
+jsonpointer==3.4
 keystoneauth1==5.18.1
 loguru==0.7.3
 markdown-it-py==4.2.0

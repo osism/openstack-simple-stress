@@ -1,7 +1,7 @@
 ---
 - job:
     name: openstack-simple-stress-test
-    nodeset: ubuntu-noble
+    nodeset: ubuntu-noble-large
     pre-run: playbooks/pre-test.yml
     run: playbooks/test.yml
     post-run: playbooks/post-test.yml

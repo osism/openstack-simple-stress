@@ -1,19 +1,68 @@
 ---
+# Everything here is best-effort and must never fail the job. The node is
+# a fresh nodepool node per build, so nothing is left over from earlier
+# builds in zuul-output.
 - name: Post integration test play
   hosts: all
+
+  vars:
+    logs_dir: "{{ ansible_user_dir }}/zuul-output/logs"
 
   tasks:
     - name: Collect devstack service logs
       ansible.builtin.shell:
         cmd: |
           set -o pipefail
-          out="{{ ansible_user_dir }}/zuul-output/logs/devstack"
+          out="{{ logs_dir }}/devstack"
           mkdir -p "$out"
           systemctl list-units 'devstack@*' --all --plain --no-legend \
             | awk '{print $1}' \
             | while read -r unit; do
                 sudo journalctl -u "$unit" --no-pager > "$out/${unit}.txt"
               done
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    # The devstack@* units above leave out everything else on the node:
+    # mysql.service and rabbitmq-server.service are ordinary units, and an
+    # OOM kill is reported only by the kernel. The journal of the whole
+    # boot carries all of them in one file.
+    - name: Collect the system journal
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          sudo journalctl -b --no-pager | gzip > "{{ logs_dir }}/journal.txt.gz"
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    # mysqld writes why it stopped or refused connections to its error
+    # log, not to the journal.
+    - name: Collect the MySQL logs
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          sudo test -d /var/log/mysql || exit 0
+          sudo cp -r /var/log/mysql "{{ logs_dir }}/mysql"
+          sudo chown -R "$(id -u):$(id -g)" "{{ logs_dir }}/mysql"
+          chmod -R u+rwX,go+rX "{{ logs_dir }}/mysql"
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    # What the node had to run devstack with, and what was using its
+    # memory at the end of the job.
+    - name: Record the node's resources
+      ansible.builtin.shell:
+        cmd: |
+          {
+            echo "== nproc"; nproc
+            echo; echo "== free -m"; free -m
+            echo; echo "== df -h"; df -h
+            echo; echo "== processes by RSS"
+            ps -eo pid,rss,vsz,comm --sort=-rss | head -n 25
+          } > "{{ logs_dir }}/node-info.txt" 2>&1
         executable: /bin/bash
       changed_when: false
       failed_when: false

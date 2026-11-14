@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-loguru = "==0.7.3"
+loguru = "==0.8.0"
 openstacksdk = "==4.22.0"
 typer = "==0.27.3"
 typing_extensions = "==4.16.0"

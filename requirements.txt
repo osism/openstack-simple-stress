@@ -11,7 +11,7 @@ iso8601==2.1.0
 jmespath==1.1.0
 jsonpatch==1.47
 jsonpointer==3.12
-keystoneauth1==5.18.1
+keystoneauth1==5.19.0
 loguru==0.8.0
 markdown-it-py==4.3.0
 mdurl==0.1.2

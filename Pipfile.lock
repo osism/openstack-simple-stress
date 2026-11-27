@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "251d8ef727d918a6bb29ded719cdb3d0f79eaa44c020a19c3d347caf1bda80c5"
+            "sha256": "2810b4e9c4d71796ec70c2bc6b84d308e75334fbe4ec08f1d83bd99e55188146"
         },
         "pipfile-spec": 6,
         "requires": {},
@@ -445,11 +445,11 @@
         },
         "keystoneauth1": {
             "hashes": [
-                "sha256:4dcfa141e63836d2d16edd086494cb5cb3aa92fc7f57c9ff33086e180557f638",
-                "sha256:c344dbe0d096a01b37e2c282f4ece5c6e96d50811da791c676ef8ef967f45133"
+                "sha256:7e19fe0029b2afb62a5833295dac54d587d175fda9f04c6182865ad719f5f87f",
+                "sha256:c72a66b3c8546602be8fd1de86fdee71390b4983188489cffe049ed71e28375d"
             ],
             "markers": "python_version >= '3.11'",
-            "version": "==5.19.0"
+            "version": "==5.20.0"
         },
         "loguru": {
             "hashes": [
@@ -478,12 +478,12 @@
         },
         "openstacksdk": {
             "hashes": [
-                "sha256:757f399346f804d0a70b83fead919c498521e509889cd8973ece5cf7a640e6f9",
-                "sha256:e5aafe38e4c338bcb3844f1f446d7761c68477db8cec0e4bb91f4de9d35877c1"
+                "sha256:23c3157032d142e2b6ad5e7582a307cbc513b240509ee2dfdcc8dea8773d2096",
+                "sha256:a7eb1c330128d9fd776e57449e53e9949d1f7a6d53dd95525b3bbc9c2a686143"
             ],
             "index": "pypi",
             "markers": "python_version >= '3.11'",
-            "version": "==4.22.0"
+            "version": "==4.25.0"
         },
         "os-service-types": {
             "hashes": [

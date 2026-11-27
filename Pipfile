@@ -5,6 +5,6 @@ name = "pypi"
 
 [packages]
 loguru = "==0.8.0"
-openstacksdk = "==4.22.0"
+openstacksdk = "==4.25.0"
 typer = "==0.29.2"
 typing_extensions = "==4.16.0"
